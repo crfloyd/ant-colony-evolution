@@ -46,6 +46,9 @@ export const OBSTACLE_DEFAULT_COLLISION_RADIUS = 10; // Default entity radius fo
 
 // Ant Settings
 export const ANT_MAX_SPEED = 3;
+export const ANT_MAX_ACCEL = 20;      // units/s² (tune 10–40)
+export const ANT_MAX_TURN = Math.PI;  // rad/s (tune 2–6 for smoother)
+export const ANT_MIN_SPEED = 0.2;     // keep small floor to avoid “stall”
 export const ANT_STARTING_ENERGY = 200; // Starting energy per ant
 export const ANT_ENERGY_DRAIN = 0.03; // Ants starve in ~2 minutes without food
 export const ANT_ENERGY_FROM_FOOD_PICKUP = 10; // Energy restored when finding food
@@ -76,33 +79,51 @@ export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy dr
 export const ANT_EXPECTED_MOVEMENT_RATIO = 0.3; // Minimum expected movement for stuck detection
 export const ANT_COLONY_PUSH_DISTANCE = 60; // Push distance after returning to colony
 export const ANT_JUST_RETURNED_COOLDOWN = 30; // Frames of free movement after returning
+export const PHYS_MAX_SWEEP_ITERS = 5;
+export const PHYS_EPS = 1e-5;             // numeric slop
+export const PHYS_SKIN = 0.01;            // small push-out after contact (in world units)
+export const PHYS_MIN_SPEED = 1e-3;       // ignore near-zero velocities
+export const PHYS_SUBSTEP_MAX_DIST = 200; // optional: cap per-step travel (pre-substep)
 
 // Ant behavior - wall avoidance
 export const ANT_WALL_AVOIDANCE_BLEND_AWAY = 0.7; // Weight for turning away from wall
 export const ANT_WALL_AVOIDANCE_BLEND_COLONY = 0.3; // Weight for turning toward colony
 export const ANT_RANDOM_TURN_ANGLE_RANGE = 0.5; // Random angle range for turns
 
-// Traffic smoothing (Task 16)
-export const TRAFFIC_DETECTION_RADIUS = 30; // How far to check for nearby ants
-export const TRAFFIC_SLOWDOWN_THRESHOLD = 15; // Number of nearby ants to trigger slowdown
-export const TRAFFIC_SLOWDOWN_FACTOR = 0.5; // Speed multiplier in crowded areas (50% speed)
-
 // Pheromone Settings
 export const PHEROMONE_CELL_SIZE = 20;
-export const PHEROMONE_DECAY_RATE = 0.02; // Evaporation rate per tick (rho)
-export const PHEROMONE_DIFFUSION_RATE = 0.1; // Diffusion rate (D)
+
+// Decay rates (evaporation) - separate for each type
+// homePher half-life ≈ 45s @ 20Hz → ρ ≈ 0.00154
+// foodPher half-life ≈ 20s @ 20Hz → ρ ≈ 0.00347
+export const PHEROMONE_HOME_DECAY_RATE = 0.00154; // Very slow decay for home trails
+export const PHEROMONE_FOOD_DECAY_RATE = 0.00347; // Faster decay for food trails
+
+// Diffusion rates - separate for each type (much smaller than before)
+export const PHEROMONE_HOME_DIFFUSION_RATE = 0.01; // Minimal diffusion for home
+export const PHEROMONE_FOOD_DIFFUSION_RATE = 0.02; // Slightly more diffusion for food
+
 export const PHEROMONE_MAX_LEVEL = 10; // Maximum pheromone concentration per cell
-export const PHEROMONE_MIN_THRESHOLD = 0.01; // Minimum level before clearing
+export const PHEROMONE_MIN_THRESHOLD = 0.00001; // Minimum level before clearing (very small to avoid flicker)
 export const PHEROMONE_UPDATE_INTERVAL = 3; // Update grid every N frames
 export const PHEROMONE_RENDER_INTERVAL = 5; // Render pheromones every N frames
-export const PHEROMONE_RENDER_MIN_THRESHOLD = 1.0; // Minimum level to render
-export const PHEROMONE_STRENGTH = 5; // Standard pheromone deposit strength
+export const PHEROMONE_RENDER_MIN_THRESHOLD = 0.003; // Minimum level to render (1-2% of fresh drop)
+
+// Distance-based deposit settings (replaces frame-based deposits)
+export const PHEROMONE_DEPOSIT_DISTANCE = 5; // Deposit every N units traveled (5-6 units)
+export const PHEROMONE_SCOUT_STRENGTH_PER_UNIT = 0.05; // Scout homePher strength per unit distance
+export const PHEROMONE_FORAGER_STRENGTH_PER_UNIT = 0.10; // Forager foodPher strength per unit distance (returning with food)
+
 export const PHEROMONE_FOOD_ALPHA_MAX = 0.15; // Max alpha for food pheromone visualization
 export const PHEROMONE_FOOD_ALPHA_DIVISOR = 20; // Divisor for food alpha calculation
 export const PHEROMONE_HOME_ALPHA_MAX = 0.1; // Max alpha for home pheromone visualization
 export const PHEROMONE_HOME_ALPHA_DIVISOR = 20; // Divisor for home alpha calculation
 export const PHEROMONE_RENDER_MIN_ALPHA = 0.05; // Minimum alpha to render
-export const PHEROMONE_SCOUT_TRAIL_THRESHOLD = 2.0; // Threshold to distinguish scout vs forager trails
+export const PHEROMONE_SCOUT_TRAIL_THRESHOLD = 0.15; // Threshold to distinguish scout vs forager trails (adjusted for new strengths)
+
+// Gradient magnitude thresholds for steering
+export const GRADIENT_MIN_THRESHOLD = 0.001; // G0 - ignore gradients below this
+export const GRADIENT_SPAN = 0.01; // Gspan - range to scale gradient influence
 
 // FOV Sensing (Phase 2 Task 6)
 export const FOV_RAY_COUNT = 5; // Number of rays to cast (3-5)
@@ -111,19 +132,23 @@ export const FOV_DISTANCE = 80; // How far rays extend
 export const FOV_ANGLE_TOLERANCE = 0.3; // Radians (~17 degrees) for food detection along ray
 export const FOV_OBSTACLE_DISTANCE_SAFETY = 0.8; // Multiplier for obstacle distance
 
-// Trail deposit settings
-export const FOOD_PHER_DEPOSIT_INTERVAL = 4; // Deposit foodPher every N steps
-export const HOME_PHER_DEPOSIT_INTERVAL = 8; // Deposit weak homePher every N steps (foragers)
-export const SCOUT_HOME_PHER_DEPOSIT_INTERVAL = 10; // Scout deposit interval
-
 // Foraging behavior weights
 export const FORAGING_OBSTACLE_PENALTY = 3.0; // Score penalty for obstacles
 export const FORAGING_EXPLORATION_BONUS = 0.3; // Bonus for moving away from colony
-export const FORAGING_RANDOM_COMPONENT = 4.0; // Random score variation for exploration
-export const FORAGING_RANDOM_TURN_PROBABILITY = 0.02; // 2% chance per frame to make big turn
+export const FORAGING_RANDOM_COMPONENT = 0.5; // Random score variation for exploration (reduced for smoother movement)
 export const FORAGING_PHEROMONE_SAMPLE_DISTANCE = 30; // Distance to sample pheromone
-export const FORAGING_TRAIL_MIN_LEVEL = 0.5; // Minimum pheromone to consider following
-export const FORAGING_TRAIL_SAMPLE_MIN = 0.1; // Minimum pheromone in sample direction
+export const FORAGING_TRAIL_MIN_LEVEL = 0.01; // Minimum pheromone to consider following (adjusted for new strengths)
+export const FORAGING_TRAIL_SAMPLE_MIN = 0.003; // Minimum pheromone in sample direction (adjusted for new strengths)
+
+// Exploration commitment (smooth exploration movement)
+export const FORAGING_EXPLORATION_MIN_DURATION = 2.0; // Minimum seconds to commit to a direction
+export const FORAGING_EXPLORATION_MAX_DURATION = 5.0; // Maximum seconds to commit to a direction
+
+// Trail following hysteresis (prevents mode flapping at trail edges)
+export const TRAIL_ENTER_LEVEL = 0.06; // Higher threshold to start following
+export const TRAIL_EXIT_LEVEL = 0.03; // Lower threshold to stop (hysteresis)
+export const TRAIL_LATCH_TIME = 0.4; // Seconds to stay in mode
+export const TRAIL_END_COOLDOWN = 0.6; // Seconds to ignore trails after exiting
 
 // Returning behavior
 export const RETURNING_COLONY_WEIGHT = 0.7; // Weight for direct colony direction
@@ -142,7 +167,7 @@ export const LEVY_WALK_MIN_STEP = 50; // Minimum step length
 export const LEVY_WALK_MAX_STEP = 400; // Maximum step length
 export const LEVY_WALK_SCALE = 30; // Scale factor for distribution
 export const LEVY_COLONY_BIAS_DISTANCE = 800; // Distance threshold for colony avoidance bias
-export const LEVY_SCOUT_HOMEPHER_DISTANCE = 400; // Only deposit homePher when farther than this
+export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in (removed hard gate)
 
 // Softmax selection
 export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning

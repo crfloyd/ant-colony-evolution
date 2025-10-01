@@ -40,6 +40,7 @@ export class PheromoneGrid {
     container.addChild(this.graphics);
   }
 
+  /** Bilinear splat - deposit pheromone across 4 surrounding cells based on fractional position */
   public depositPheromone(
     x: number,
     y: number,
@@ -48,100 +49,160 @@ export class PheromoneGrid {
     foodSourceId?: string,
     obstacleManager?: any
   ): void {
-    const gridX = Math.floor(x / this.cellSize);
-    const gridY = Math.floor(y / this.cellSize);
+    // Convert world coordinates to grid coordinates (floating point)
+    const gx = x / this.cellSize;
+    const gy = y / this.cellSize;
 
-    if (this.isValidCell(gridX, gridY)) {
-      // Check if this grid cell overlaps with an obstacle
-      if (obstacleManager) {
-        const cellCenterX = (gridX + 0.5) * this.cellSize;
-        const cellCenterY = (gridY + 0.5) * this.cellSize;
-        const cellOverlapsObstacle = obstacleManager.checkCollision(
-          { x: cellCenterX, y: cellCenterY },
-          this.cellSize / 2
-        );
+    // Get integer cell indices
+    const i = Math.floor(gx);
+    const j = Math.floor(gy);
 
-        if (cellOverlapsObstacle) {
-          // Don't deposit pheromone in cells that overlap with obstacles
-          return;
-        }
-      }
+    // Get fractional part (position within cell)
+    const fx = gx - i;
+    const fy = gy - j;
 
-      this.grid[gridY][gridX][type] = Math.min(
-        CONFIG.PHEROMONE_MAX_LEVEL,
-        this.grid[gridY][gridX][type] + amount
+    // Compute bilinear weights
+    const w00 = (1 - fx) * (1 - fy);
+    const w10 = fx * (1 - fy);
+    const w01 = (1 - fx) * fy;
+    const w11 = fx * fy;
+
+    // Deposit to 4 surrounding cells with weights
+    this.depositToCell(i, j, type, amount * w00, foodSourceId, obstacleManager);
+    this.depositToCell(i + 1, j, type, amount * w10, foodSourceId, obstacleManager);
+    this.depositToCell(i, j + 1, type, amount * w01, foodSourceId, obstacleManager);
+    this.depositToCell(i + 1, j + 1, type, amount * w11, foodSourceId, obstacleManager);
+  }
+
+  /** Helper to deposit to a single cell */
+  private depositToCell(
+    gridX: number,
+    gridY: number,
+    type: 'foodPher' | 'homePher',
+    amount: number,
+    foodSourceId?: string,
+    obstacleManager?: any
+  ): void {
+    if (!this.isValidCell(gridX, gridY)) return;
+
+    // Check if this grid cell overlaps with an obstacle
+    if (obstacleManager) {
+      const cellCenterX = (gridX + 0.5) * this.cellSize;
+      const cellCenterY = (gridY + 0.5) * this.cellSize;
+      const cellOverlapsObstacle = obstacleManager.checkCollision(
+        { x: cellCenterX, y: cellCenterY },
+        this.cellSize / 2
       );
 
-      // Set food source ID if provided (for food pheromones)
-      if (type === 'foodPher' && foodSourceId) {
-        this.grid[gridY][gridX].foodSourceId = foodSourceId;
+      if (cellOverlapsObstacle) {
+        return;
       }
+    }
+
+    this.grid[gridY][gridX][type] = Math.min(
+      CONFIG.PHEROMONE_MAX_LEVEL,
+      this.grid[gridY][gridX][type] + amount
+    );
+
+    // Set food source ID if provided (for food pheromones)
+    if (type === 'foodPher' && foodSourceId) {
+      this.grid[gridY][gridX].foodSourceId = foodSourceId;
     }
   }
 
+  /** Bilinear interpolation for smooth pheromone sampling */
   public getPheromoneLevel(
     x: number,
     y: number,
     type: 'foodPher' | 'homePher'
   ): number {
-    const gridX = Math.floor(x / this.cellSize);
-    const gridY = Math.floor(y / this.cellSize);
+    // Convert to grid coordinates
+    const gx = x / this.cellSize;
+    const gy = y / this.cellSize;
 
-    if (this.isValidCell(gridX, gridY)) {
-      return this.grid[gridY][gridX][type];
-    }
-    return 0;
+    // Get integer cell indices
+    const i = Math.floor(gx);
+    const j = Math.floor(gy);
+
+    // Get fractional part
+    const fx = gx - i;
+    const fy = gy - j;
+
+    // Sample 4 surrounding cells
+    const v00 = this.isValidCell(i, j) ? this.grid[j][i][type] : 0;
+    const v10 = this.isValidCell(i + 1, j) ? this.grid[j][i + 1][type] : 0;
+    const v01 = this.isValidCell(i, j + 1) ? this.grid[j + 1][i][type] : 0;
+    const v11 = this.isValidCell(i + 1, j + 1) ? this.grid[j + 1][i + 1][type] : 0;
+
+    // Bilinear interpolation
+    return (1 - fx) * (1 - fy) * v00 +
+           fx * (1 - fy) * v10 +
+           (1 - fx) * fy * v01 +
+           fx * fy * v11;
   }
 
+  /**
+   * Compute pheromone gradient with magnitude preservation
+   * Uses centered difference: g_x = (R - L) / (2*CELL), g_y = (B - T) / (2*CELL)
+   * Returns gradient vector (NOT normalized) - magnitude indicates strength
+   */
   public getPheromoneGradient(
     x: number,
     y: number,
     type: 'foodPher' | 'homePher',
     foodSourceId?: string
   ): { x: number; y: number } {
-    const gridX = Math.floor(x / this.cellSize);
-    const gridY = Math.floor(y / this.cellSize);
+    // Convert to grid coordinates
+    const gx = x / this.cellSize;
+    const gy = y / this.cellSize;
 
+    // Get integer cell indices
+    const i = Math.floor(gx);
+    const j = Math.floor(gy);
+
+    // Get fractional part for bilinear interpolation
+    const fx = gx - i;
+    const fy = gy - j;
+
+    // Sample gradient at 4 surrounding cells and interpolate
     let gradX = 0;
     let gradY = 0;
 
-    if (this.isValidCell(gridX, gridY)) {
-      const current = this.grid[gridY][gridX][type];
+    // Compute gradients at the 4 corners
+    for (let dy = 0; dy <= 1; dy++) {
+      for (let dx = 0; dx <= 1; dx++) {
+        const cellI = i + dx;
+        const cellJ = j + dy;
 
-      // Sample neighboring cells - only from same food source if specified
-      if (this.isValidCell(gridX + 1, gridY)) {
-        const neighbor = this.grid[gridY][gridX + 1];
-        if (!foodSourceId || neighbor.foodSourceId === foodSourceId || neighbor.foodSourceId === null) {
-          gradX += neighbor[type] - current;
-        }
-      }
-      if (this.isValidCell(gridX - 1, gridY)) {
-        const neighbor = this.grid[gridY][gridX - 1];
-        if (!foodSourceId || neighbor.foodSourceId === foodSourceId || neighbor.foodSourceId === null) {
-          gradX -= neighbor[type] - current;
-        }
-      }
-      if (this.isValidCell(gridX, gridY + 1)) {
-        const neighbor = this.grid[gridY + 1][gridX];
-        if (!foodSourceId || neighbor.foodSourceId === foodSourceId || neighbor.foodSourceId === null) {
-          gradY += neighbor[type] - current;
-        }
-      }
-      if (this.isValidCell(gridX, gridY - 1)) {
-        const neighbor = this.grid[gridY - 1][gridX];
-        if (!foodSourceId || neighbor.foodSourceId === foodSourceId || neighbor.foodSourceId === null) {
-          gradY -= neighbor[type] - current;
-        }
+        if (!this.isValidCell(cellI, cellJ)) continue;
+
+        // Centered difference at this cell
+        const inv2dx = 1 / (2 * this.cellSize);
+
+        // Right neighbor
+        const right = this.isValidCell(cellI + 1, cellJ) ? this.grid[cellJ][cellI + 1][type] : this.grid[cellJ][cellI][type];
+        // Left neighbor
+        const left = this.isValidCell(cellI - 1, cellJ) ? this.grid[cellJ][cellI - 1][type] : this.grid[cellJ][cellI][type];
+        // Bottom neighbor
+        const bottom = this.isValidCell(cellI, cellJ + 1) ? this.grid[cellJ + 1][cellI][type] : this.grid[cellJ][cellI][type];
+        // Top neighbor
+        const top = this.isValidCell(cellI, cellJ - 1) ? this.grid[cellJ - 1][cellI][type] : this.grid[cellJ][cellI][type];
+
+        // Centered difference
+        const gx_cell = (right - left) * inv2dx;
+        const gy_cell = (bottom - top) * inv2dx;
+
+        // Bilinear weight for this corner
+        const wx = (dx === 0) ? (1 - fx) : fx;
+        const wy = (dy === 0) ? (1 - fy) : fy;
+        const weight = wx * wy;
+
+        gradX += gx_cell * weight;
+        gradY += gy_cell * weight;
       }
     }
 
-    // Normalize
-    const magnitude = Math.sqrt(gradX * gradX + gradY * gradY);
-    if (magnitude > 0) {
-      gradX /= magnitude;
-      gradY /= magnitude;
-    }
-
+    // Return gradient WITHOUT normalization - preserve magnitude
     return { x: gradX, y: gradY };
   }
 
@@ -167,17 +228,19 @@ export class PheromoneGrid {
       }
     }
 
-    // Apply evaporation and diffusion
-    const rho = CONFIG.PHEROMONE_DECAY_RATE;
-    const D = CONFIG.PHEROMONE_DIFFUSION_RATE;
+    // Apply evaporation and diffusion with separate rates for food/home pheromones
+    const rho_food = CONFIG.PHEROMONE_FOOD_DECAY_RATE;
+    const rho_home = CONFIG.PHEROMONE_HOME_DECAY_RATE;
+    const D_food = CONFIG.PHEROMONE_FOOD_DIFFUSION_RATE;
+    const D_home = CONFIG.PHEROMONE_HOME_DIFFUSION_RATE;
 
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
-        // Evaporation: grid *= (1 - rho)
-        let foodValue = this.grid[y][x].foodPher * (1 - rho);
-        let homeValue = this.grid[y][x].homePher * (1 - rho);
+        // Evaporation: grid *= (1 - rho) - separate rates for food/home
+        let foodValue = this.grid[y][x].foodPher * (1 - rho_food);
+        let homeValue = this.grid[y][x].homePher * (1 - rho_home);
 
-        // Diffusion: grid = (1 - D)*grid + D*avg(neighbors)
+        // Diffusion: grid = (1 - D)*grid + D*avg(neighbors) - separate rates
         // Calculate average of 4-connected neighbors
         let foodNeighborSum = 0;
         let homeNeighborSum = 0;
@@ -208,14 +271,15 @@ export class PheromoneGrid {
           const foodAvg = foodNeighborSum / neighborCount;
           const homeAvg = homeNeighborSum / neighborCount;
 
-          foodValue = (1 - D) * foodValue + D * foodAvg;
-          homeValue = (1 - D) * homeValue + D * homeAvg;
+          // Apply separate diffusion rates
+          foodValue = (1 - D_food) * foodValue + D_food * foodAvg;
+          homeValue = (1 - D_home) * homeValue + D_home * homeAvg;
         }
 
         this.grid[y][x].foodPher = foodValue;
         this.grid[y][x].homePher = homeValue;
 
-        // Remove very small values
+        // Remove very small values to avoid flicker
         if (this.grid[y][x].foodPher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].foodPher = 0;
         if (this.grid[y][x].homePher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].homePher = 0;
       }

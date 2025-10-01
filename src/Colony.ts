@@ -102,7 +102,7 @@ export class Colony implements Entity {
     // Update all ants every frame
     for (let i = this.ants.length - 1; i >= 0; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime, foodSources, obstacleManager, this.ants); // Pass all ants for traffic smoothing
+      ant.update(deltaTime, foodSources, obstacleManager);
 
       // Remove dead ants
       if (!ant.isAlive()) {
