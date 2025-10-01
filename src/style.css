@@ -1,0 +1,134 @@
+:root {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #1a1a1a;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+#gameCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #0a0a0a;
+}
+
+#ui {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  pointer-events: none;
+}
+
+.stats-panel {
+  background: rgba(20, 20, 20, 0.9);
+  border: 2px solid rgba(100, 255, 100, 0.3);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 200px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.stats-panel h2 {
+  color: #64ff64;
+  font-size: 1.2em;
+  margin-bottom: 15px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-weight: 600;
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(100, 255, 100, 0.1);
+  color: #e0e0e0;
+  font-size: 0.95em;
+}
+
+.stat:last-child {
+  border-bottom: none;
+}
+
+.stat .label {
+  color: #aaa;
+  font-weight: 500;
+}
+
+.stat span:last-child {
+  color: #64ff64;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.controls {
+  margin-top: 15px;
+  display: flex;
+  gap: 10px;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+button {
+  border-radius: 8px;
+  border: 2px solid rgba(100, 255, 100, 0.4);
+  padding: 10px 20px;
+  font-size: 0.9em;
+  font-weight: 600;
+  font-family: inherit;
+  background: rgba(30, 30, 30, 0.9);
+  color: #64ff64;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+button:hover {
+  border-color: #64ff64;
+  background: rgba(100, 255, 100, 0.1);
+  box-shadow: 0 0 20px rgba(100, 255, 100, 0.3);
+  transform: translateY(-2px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button:focus,
+button:focus-visible {
+  outline: 2px solid rgba(100, 255, 100, 0.5);
+  outline-offset: 2px;
+}

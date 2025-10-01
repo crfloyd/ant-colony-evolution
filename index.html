@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ant Colony Simulation</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="gameCanvas"></canvas>
+      <div id="ui">
+        <div class="stats-panel">
+          <h2>Colony Stats</h2>
+          <div class="stat"><span class="label">Ants:</span> <span id="antCount">0</span></div>
+          <div class="stat"><span class="label">Food:</span> <span id="foodCount">0</span></div>
+          <div class="stat"><span class="label">Generation:</span> <span id="generation">1</span></div>
+          <div class="stat"><span class="label">FPS:</span> <span id="fps">60</span></div>
+        </div>
+        <div class="controls">
+          <button id="pauseBtn">Pause</button>
+          <button id="speedBtn">Speed: 1x</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
