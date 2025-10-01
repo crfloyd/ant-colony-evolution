@@ -77,7 +77,7 @@ export class FoodManager {
     this.worldHeight = worldHeight;
 
     // Spawn initial food sources
-    this.spawnInitialFood(10);
+    this.spawnInitialFood(20);
   }
 
   private spawnInitialFood(count: number): void {
@@ -87,16 +87,17 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // Random position, avoiding center (colony area)
+    // Random position, avoiding center (colony area) and edges
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
     const minDistFromCenter = 200;
+    const margin = 50; // Keep food away from edges so ants can reach it
 
     let position: Vector2;
     do {
       position = {
-        x: Math.random() * this.worldWidth,
-        y: Math.random() * this.worldHeight,
+        x: margin + Math.random() * (this.worldWidth - 2 * margin),
+        y: margin + Math.random() * (this.worldHeight - 2 * margin),
       };
 
       const dx = position.x - centerX;
@@ -108,7 +109,7 @@ export class FoodManager {
       }
     } while (true);
 
-    const food = new FoodSource(position, 30 + Math.random() * 40);
+    const food = new FoodSource(position, 50 + Math.random() * 50); // 50-100 food per source
     this.foodSources.push(food);
     this.container.addChild(food.sprite);
   }

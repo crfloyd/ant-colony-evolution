@@ -2,14 +2,14 @@ import { Container } from 'pixi.js';
 
 export class Camera {
   public container: Container;
-  public zoom: number = 1;
-  public minZoom: number = 0.25;
+  public zoom: number = 0.5;
+  public minZoom: number = 0.125;
   public maxZoom: number = 3;
 
   private isDragging: boolean = false;
   private dragStart: { x: number; y: number } = { x: 0, y: 0 };
   private keys: Set<string> = new Set();
-  private moveSpeed: number = 10;
+  private moveSpeed: number = 5;
 
   constructor(container: Container) {
     this.container = container;

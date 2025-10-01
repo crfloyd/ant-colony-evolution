@@ -14,12 +14,13 @@ export class Game {
 
   private isPaused: boolean = false;
   private simulationSpeed: number = 1;
-  private worldWidth: number = 2000;
-  private worldHeight: number = 2000;
+  private worldWidth: number = 8000;
+  private worldHeight: number = 8000;
 
   // UI elements
   private antCountEl: HTMLElement;
   private foodCountEl: HTMLElement;
+  private spawnProgressEl: HTMLElement;
   private generationEl: HTMLElement;
   private fpsEl: HTMLElement;
 
@@ -30,6 +31,7 @@ export class Game {
     // Initialize UI elements
     this.antCountEl = document.getElementById('antCount')!;
     this.foodCountEl = document.getElementById('foodCount')!;
+    this.spawnProgressEl = document.getElementById('spawnProgress')!;
     this.generationEl = document.getElementById('generation')!;
     this.fpsEl = document.getElementById('fps')!;
 
@@ -59,6 +61,13 @@ export class Game {
 
     // Initialize camera
     this.camera = new Camera(this.worldContainer);
+
+    // Calculate zoom to fit world in viewport
+    const zoomX = this.app.screen.width / this.worldWidth;
+    const zoomY = this.app.screen.height / this.worldHeight;
+    const fitZoom = Math.min(zoomX, zoomY) * 0.9; // 90% to add some padding
+
+    this.camera.setZoom(fitZoom);
     this.camera.centerOn(
       this.worldWidth / 2,
       this.worldHeight / 2,
@@ -74,11 +83,13 @@ export class Game {
       20
     );
 
-    // Create colony at center
+    // Create colony at center with more initial ants
     this.colony = new Colony(
       { x: this.worldWidth / 2, y: this.worldHeight / 2 },
       this.pheromoneGrid,
-      30
+      50,
+      this.worldWidth,
+      this.worldHeight
     );
     this.worldContainer.addChild(this.colony.sprite);
     this.colony.setWorldContainer(this.worldContainer);
@@ -130,7 +141,15 @@ export class Game {
     // Speed button
     const speedBtn = document.getElementById('speedBtn')!;
     speedBtn.addEventListener('click', () => {
-      this.simulationSpeed = this.simulationSpeed === 1 ? 2 : this.simulationSpeed === 2 ? 4 : 1;
+      if (this.simulationSpeed === 1) {
+        this.simulationSpeed = 2;
+      } else if (this.simulationSpeed === 2) {
+        this.simulationSpeed = 4;
+      } else if (this.simulationSpeed === 4) {
+        this.simulationSpeed = 10;
+      } else {
+        this.simulationSpeed = 1;
+      }
       speedBtn.textContent = `Speed: ${this.simulationSpeed}x`;
     });
   }
@@ -153,7 +172,7 @@ export class Game {
     // Update colony (pass food sources for sensing)
     this.colony.update(adjustedDelta, this.foodManager.getFoodSources());
 
-    // Check ant-food collisions (larger radius)
+    // Check ant-food collisions
     for (const ant of this.colony.ants) {
       const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
       if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35)) {
@@ -168,6 +187,7 @@ export class Game {
   private updateUI(): void {
     this.antCountEl.textContent = this.colony.getAntCount().toString();
     this.foodCountEl.textContent = Math.floor(this.colony.foodStored).toString();
+    this.spawnProgressEl.textContent = `${this.colony.foodSinceLastSpawn}/10`;
     this.generationEl.textContent = this.colony.generation.toString();
     this.fpsEl.textContent = Math.round(this.app.ticker.FPS).toString();
   }

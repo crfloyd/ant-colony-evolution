@@ -9,16 +9,19 @@ export class Colony implements Entity {
   public foodStored: number = 20; // Start with some food
   public ants: Ant[] = [];
   public generation: number = 1;
+  public foodSinceLastSpawn: number = 0; // Track food collected for spawning
 
   private graphics: Graphics;
   private pheromoneGrid: PheromoneGrid;
-  private spawnTimer: number = 0;
-  private spawnInterval: number = 200; // Spawn every 200 frames when we have food
   private worldContainer: Container | null = null;
+  private worldWidth: number = 8000;
+  private worldHeight: number = 8000;
 
-  constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20) {
+  constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000) {
     this.position = { ...position };
     this.pheromoneGrid = pheromoneGrid;
+    this.worldWidth = worldWidth;
+    this.worldHeight = worldHeight;
 
     // Create sprite
     this.sprite = new Container();
@@ -74,19 +77,16 @@ export class Colony implements Entity {
       y: this.position.y + Math.sin(angle) * distance,
     };
 
-    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, parentBrain);
+    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, parentBrain, this.worldWidth, this.worldHeight);
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
   }
 
   public update(deltaTime: number, foodSources?: any[]): void {
-    // Update spawn timer
-    this.spawnTimer += deltaTime;
-
-    // Spawn new ant if we have enough food (cheaper and more frequent)
-    if (this.spawnTimer >= this.spawnInterval && this.foodStored >= 3) {
-      this.spawnTimer = 0;
-      this.foodStored -= 3;
+    // Spawn new ant every 10 food collected, costs 10 food
+    if (this.foodSinceLastSpawn >= 10 && this.foodStored >= 10) {
+      this.foodSinceLastSpawn = 0;
+      this.foodStored -= 10; // Spawning costs food
 
       // Choose a successful ant to reproduce from
       const successfulAnt = this.getSuccessfulAnt();
@@ -104,19 +104,24 @@ export class Colony implements Entity {
 
       // Remove dead ants
       if (!ant.isAlive()) {
+        // Debug: log why ant died
+        if (ant.energy <= 0) {
+          console.log(`Ant died of starvation after ${Math.floor(ant.age)} ticks`);
+        }
         ant.destroy();
         this.ants.splice(i, 1);
         continue;
       }
 
       // Check if ant returned to colony with food
-      if (ant.checkColonyReturn()) {
+      if (ant.checkColonyReturn(50)) {
         this.foodStored += 1;
+        this.foodSinceLastSpawn += 1;
       }
     }
 
-    // Check for generation advancement
-    if (this.ants.length > 50) {
+    // Check for generation advancement (only when population is too large)
+    if (this.ants.length > 500) {
       this.advanceGeneration();
     }
   }
@@ -135,6 +140,8 @@ export class Colony implements Entity {
 
   private advanceGeneration(): void {
     // Natural selection - remove weakest ants
+    console.log(`Generation ${this.generation} → ${this.generation + 1}: Culling ${this.ants.length} ants down to top 50%`);
+
     this.ants.sort((a, b) => b.energy - a.energy);
 
     // Keep top 50%
