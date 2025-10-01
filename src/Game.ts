@@ -3,6 +3,8 @@ import { Camera } from './Camera';
 import { PheromoneGrid } from './PheromoneGrid';
 import { Colony } from './Colony';
 import { FoodManager } from './Food';
+import { ObstacleManager } from './Obstacle';
+import * as CONFIG from './config';
 
 export class Game {
   private app: Application;
@@ -11,11 +13,12 @@ export class Game {
   private pheromoneGrid!: PheromoneGrid;
   private colony!: Colony;
   private foodManager!: FoodManager;
+  private obstacleManager!: ObstacleManager;
 
   private isPaused: boolean = false;
   private simulationSpeed: number = 1;
-  private worldWidth: number = 8000;
-  private worldHeight: number = 8000;
+  private worldWidth: number = CONFIG.WORLD_WIDTH;
+  private worldHeight: number = CONFIG.WORLD_HEIGHT;
 
   // UI elements
   private antCountEl: HTMLElement;
@@ -62,43 +65,59 @@ export class Game {
     // Initialize camera
     this.camera = new Camera(this.worldContainer);
 
-    // Calculate zoom to fit world in viewport
-    const zoomX = this.app.screen.width / this.worldWidth;
-    const zoomY = this.app.screen.height / this.worldHeight;
-    const fitZoom = Math.min(zoomX, zoomY) * 0.9; // 90% to add some padding
+    // Reset camera to fit and center world
+    const resetCamera = () => {
+      const zoomX = this.app.screen.width / this.worldWidth;
+      const zoomY = this.app.screen.height / this.worldHeight;
+      const fitZoom = Math.min(zoomX, zoomY) * 0.9; // 90% to add some padding
 
-    this.camera.setZoom(fitZoom);
-    this.camera.centerOn(
-      this.worldWidth / 2,
-      this.worldHeight / 2,
-      this.app.screen.width,
-      this.app.screen.height
-    );
+      this.camera.setZoom(fitZoom);
+      this.camera.centerOn(
+        this.worldWidth / 2,
+        this.worldHeight / 2,
+        this.app.screen.width,
+        this.app.screen.height
+      );
+    };
+
+    // Initial camera setup
+    resetCamera();
+
+    // Set up spacebar to reset camera (same as initial setup)
+    this.camera.setRecenterCallback(resetCamera);
 
     // Initialize systems
     this.pheromoneGrid = new PheromoneGrid(
       this.worldContainer,
       this.worldWidth,
       this.worldHeight,
-      20
+      CONFIG.PHEROMONE_CELL_SIZE
     );
 
     // Create colony at center with more initial ants
     this.colony = new Colony(
       { x: this.worldWidth / 2, y: this.worldHeight / 2 },
       this.pheromoneGrid,
-      50,
+      CONFIG.INITIAL_ANT_COUNT,
       this.worldWidth,
       this.worldHeight
     );
     this.worldContainer.addChild(this.colony.sprite);
     this.colony.setWorldContainer(this.worldContainer);
 
-    // Initialize food manager
-    this.foodManager = new FoodManager(
+    // Initialize obstacle manager
+    this.obstacleManager = new ObstacleManager(
       this.worldContainer,
       this.worldWidth,
       this.worldHeight
+    );
+
+    // Initialize food manager (pass obstacles so food doesn't spawn inside them)
+    this.foodManager = new FoodManager(
+      this.worldContainer,
+      this.worldWidth,
+      this.worldHeight,
+      this.obstacleManager
     );
 
     // Draw world boundaries
@@ -169,14 +188,16 @@ export class Game {
     // Update food manager
     this.foodManager.update(adjustedDelta);
 
-    // Update colony (pass food sources for sensing)
-    this.colony.update(adjustedDelta, this.foodManager.getFoodSources());
+    // Update colony (pass food sources and obstacles for sensing)
+    this.colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager);
 
-    // Check ant-food collisions
+    // Check ant-food collisions (only for ants not carrying food)
     for (const ant of this.colony.ants) {
-      const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
-      if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35)) {
-        nearbyFood.consume(1);
+      if (!ant.hasFood) {
+        const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
+        if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35)) {
+          nearbyFood.consume(1);
+        }
       }
     }
 
@@ -199,6 +220,7 @@ export class Game {
   public destroy(): void {
     this.colony.destroy();
     this.foodManager.destroy();
+    this.obstacleManager.destroy();
     this.app.destroy(true);
   }
 }

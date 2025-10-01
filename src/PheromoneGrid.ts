@@ -12,6 +12,8 @@ export class PheromoneGrid {
   private width: number;
   private height: number;
   private decayRate: number = 0.998; // Pheromones decay slower
+  private renderFrame: number = 0;
+  private updateFrame: number = 0;
 
   constructor(
     container: Container,
@@ -112,11 +114,16 @@ export class PheromoneGrid {
   }
 
   public update(): void {
+    // Only decay every 3 frames for performance
+    this.updateFrame++;
+    if (this.updateFrame % 3 !== 0) return;
+
     // Decay all pheromones
+    const decayFactor = Math.pow(this.decayRate, 3); // Compensate for skipped frames
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
-        this.grid[y][x].foodTrail *= this.decayRate;
-        this.grid[y][x].exploration *= this.decayRate;
+        this.grid[y][x].foodTrail *= decayFactor;
+        this.grid[y][x].exploration *= decayFactor;
 
         // Remove very small values
         if (this.grid[y][x].foodTrail < 0.01) this.grid[y][x].foodTrail = 0;
@@ -126,26 +133,31 @@ export class PheromoneGrid {
   }
 
   public render(): void {
+    // Only render pheromones every 5 frames for performance
+    this.renderFrame++;
+    if (this.renderFrame % 5 !== 0) return;
+
     this.graphics.clear();
 
-    // Render pheromone trails
+    // Render pheromone trails - only render strong ones
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         const cell = this.grid[y][x];
 
-        if (cell.foodTrail > 0.1 || cell.exploration > 0.1) {
+        // Only render if there's a meaningful amount
+        if (cell.foodTrail > 1.0 || cell.exploration > 1.0) {
           const worldX = x * this.cellSize;
           const worldY = y * this.cellSize;
 
-          // Food trail is green
-          const foodAlpha = Math.min(0.6, cell.foodTrail / 10);
+          // Food trail is green (very faint)
+          const foodAlpha = Math.min(0.15, cell.foodTrail / 20);
           if (foodAlpha > 0.05) {
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
             this.graphics.fill({ color: 0x00ff00, alpha: foodAlpha });
           }
 
-          // Exploration trail is blue (less visible)
-          const explorationAlpha = Math.min(0.3, cell.exploration / 10);
+          // Exploration trail is blue (even fainter)
+          const explorationAlpha = Math.min(0.1, cell.exploration / 20);
           if (explorationAlpha > 0.05) {
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
             this.graphics.fill({ color: 0x0066ff, alpha: explorationAlpha });

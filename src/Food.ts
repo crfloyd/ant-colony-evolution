@@ -1,5 +1,6 @@
 import { Graphics, Container } from 'pixi.js';
 import { Entity, Vector2 } from './types';
+import * as CONFIG from './config';
 
 export class FoodSource implements Entity {
   public position: Vector2;
@@ -28,17 +29,23 @@ export class FoodSource implements Entity {
   private render(): void {
     this.graphics.clear();
 
-    // Size based on remaining amount
+    // Size based on remaining amount - starts big, shrinks as consumed
     const sizeRatio = this.amount / this.maxAmount;
-    const radius = 10 + sizeRatio * 10;
+    const minRadius = 5;
+    const maxRadius = 25;
+    const radius = minRadius + sizeRatio * (maxRadius - minRadius);
 
-    // Food pile
+    // Food pile (circle)
     this.graphics.circle(0, 0, radius);
     this.graphics.fill({ color: 0xffdd44, alpha: 0.9 }); // Yellow/orange
 
-    // Highlight
+    // Highlight for 3D effect
     this.graphics.circle(-radius * 0.3, -radius * 0.3, radius * 0.4);
     this.graphics.fill({ color: 0xffffaa, alpha: 0.6 });
+
+    // Shadow/depth
+    this.graphics.circle(radius * 0.2, radius * 0.2, radius * 0.3);
+    this.graphics.fill({ color: 0x000000, alpha: 0.15 });
   }
 
   public consume(amount: number = 1): boolean {
@@ -70,14 +77,16 @@ export class FoodManager {
   private respawnInterval: number = 500; // Respawn food every 500 frames
   private worldWidth: number;
   private worldHeight: number;
+  private obstacleManager: any = null;
 
-  constructor(container: Container, worldWidth: number, worldHeight: number) {
+  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any) {
     this.container = container;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
+    this.obstacleManager = obstacleManager;
 
     // Spawn initial food sources
-    this.spawnInitialFood(20);
+    this.spawnInitialFood(CONFIG.INITIAL_FOOD_SOURCES);
   }
 
   private spawnInitialFood(count: number): void {
@@ -87,13 +96,15 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // Random position, avoiding center (colony area) and edges
+    // Random position, avoiding center (colony area), edges, and obstacles
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
     const minDistFromCenter = 200;
     const margin = 50; // Keep food away from edges so ants can reach it
 
     let position: Vector2;
+    let attempts = 0;
+
     do {
       position = {
         x: margin + Math.random() * (this.worldWidth - 2 * margin),
@@ -104,12 +115,22 @@ export class FoodManager {
       const dy = position.y - centerY;
       const distFromCenter = Math.sqrt(dx * dx + dy * dy);
 
-      if (distFromCenter >= minDistFromCenter) {
+      // Check if position is valid (not in obstacle and far from center)
+      const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, 30);
+
+      if (distFromCenter >= minDistFromCenter && !inObstacle) {
+        break;
+      }
+
+      attempts++;
+      if (attempts > 100) {
+        // Give up and use current position
         break;
       }
     } while (true);
 
-    const food = new FoodSource(position, 50 + Math.random() * 50); // 50-100 food per source
+    const amount = CONFIG.MIN_FOOD_PER_SOURCE + Math.random() * (CONFIG.MAX_FOOD_PER_SOURCE - CONFIG.MIN_FOOD_PER_SOURCE);
+    const food = new FoodSource(position, amount);
     this.foodSources.push(food);
     this.container.addChild(food.sprite);
   }

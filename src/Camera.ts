@@ -10,6 +10,7 @@ export class Camera {
   private dragStart: { x: number; y: number } = { x: 0, y: 0 };
   private keys: Set<string> = new Set();
   private moveSpeed: number = 5;
+  private recenterCallback: (() => void) | null = null;
 
   constructor(container: Container) {
     this.container = container;
@@ -59,6 +60,14 @@ export class Camera {
   }
 
   public update(): void {
+    // Space bar to re-center
+    if (this.keys.has(' ')) {
+      if (this.recenterCallback) {
+        this.recenterCallback();
+      }
+      this.keys.delete(' '); // Remove so it doesn't keep recentering
+    }
+
     // Arrow key movement
     const speed = this.moveSpeed / this.zoom;
 
@@ -82,6 +91,10 @@ export class Camera {
     if (this.keys.has('e') || this.keys.has('E')) {
       this.setZoom(this.zoom * 1.02); // Zoom in
     }
+  }
+
+  public setRecenterCallback(callback: () => void): void {
+    this.recenterCallback = callback;
   }
 
   public setZoom(newZoom: number): void {

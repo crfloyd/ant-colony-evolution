@@ -2,11 +2,12 @@ import { Graphics, Container } from 'pixi.js';
 import { Entity, Vector2 } from './types';
 import { Ant } from './Ant';
 import { PheromoneGrid } from './PheromoneGrid';
+import * as CONFIG from './config';
 
 export class Colony implements Entity {
   public position: Vector2;
   public sprite: Container;
-  public foodStored: number = 20; // Start with some food
+  public foodStored: number = CONFIG.COLONY_STARTING_FOOD;
   public ants: Ant[] = [];
   public generation: number = 1;
   public foodSinceLastSpawn: number = 0; // Track food collected for spawning
@@ -16,6 +17,7 @@ export class Colony implements Entity {
   private worldContainer: Container | null = null;
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
+  private updateOffset: number = 0; // For staggered updates
 
   constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000) {
     this.position = { ...position };
@@ -82,11 +84,11 @@ export class Colony implements Entity {
     this.worldContainer.addChild(ant.sprite);
   }
 
-  public update(deltaTime: number, foodSources?: any[]): void {
-    // Spawn new ant every 10 food collected, costs 10 food
-    if (this.foodSinceLastSpawn >= 10 && this.foodStored >= 10) {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // Spawn new ant when enough food collected
+    if (this.foodSinceLastSpawn >= CONFIG.FOOD_TO_SPAWN_ANT && this.foodStored >= CONFIG.FOOD_COST_TO_SPAWN) {
       this.foodSinceLastSpawn = 0;
-      this.foodStored -= 10; // Spawning costs food
+      this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN; // Spawning costs food
 
       // Choose a successful ant to reproduce from
       const successfulAnt = this.getSuccessfulAnt();
@@ -97,17 +99,17 @@ export class Colony implements Entity {
       }
     }
 
-    // Update all ants
-    for (let i = this.ants.length - 1; i >= 0; i--) {
+    // Update ants in batches - only update 1/3 of ants per frame for performance
+    const batchSize = Math.ceil(this.ants.length / 3);
+    const startIdx = this.updateOffset;
+    const endIdx = Math.min(startIdx + batchSize, this.ants.length);
+
+    for (let i = endIdx - 1; i >= startIdx; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime, foodSources);
+      ant.update(deltaTime * 3, foodSources, obstacleManager); // Multiply deltaTime to compensate for skipped frames
 
       // Remove dead ants
       if (!ant.isAlive()) {
-        // Debug: log why ant died
-        if (ant.energy <= 0) {
-          console.log(`Ant died of starvation after ${Math.floor(ant.age)} ticks`);
-        }
         ant.destroy();
         this.ants.splice(i, 1);
         continue;
@@ -120,8 +122,11 @@ export class Colony implements Entity {
       }
     }
 
+    // Move to next batch
+    this.updateOffset = (endIdx >= this.ants.length) ? 0 : endIdx;
+
     // Check for generation advancement (only when population is too large)
-    if (this.ants.length > 500) {
+    if (this.ants.length > CONFIG.MAX_ANT_COUNT) {
       this.advanceGeneration();
     }
   }
