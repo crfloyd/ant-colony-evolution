@@ -1,15 +1,16 @@
 import { Container } from 'pixi.js';
+import * as CONFIG from './config';
 
 export class Camera {
   public container: Container;
-  public zoom: number = 0.5;
-  public minZoom: number = 0.125;
-  public maxZoom: number = 3;
+  public zoom: number = CONFIG.CAMERA_START_ZOOM;
+  public minZoom: number = CONFIG.CAMERA_MIN_ZOOM;
+  public maxZoom: number = CONFIG.CAMERA_MAX_ZOOM;
 
   private isDragging: boolean = false;
   private dragStart: { x: number; y: number } = { x: 0, y: 0 };
   private keys: Set<string> = new Set();
-  private moveSpeed: number = 5;
+  private moveSpeed: number = CONFIG.CAMERA_MOVE_SPEED;
   private recenterCallback: (() => void) | null = null;
 
   constructor(container: Container) {
@@ -30,7 +31,7 @@ export class Camera {
     // Mouse wheel zoom
     window.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 0.95 : 1.05;
+      const zoomFactor = e.deltaY > 0 ? CONFIG.CAMERA_ZOOM_OUT_FACTOR : CONFIG.CAMERA_ZOOM_IN_FACTOR;
       this.setZoom(this.zoom * zoomFactor);
     }, { passive: false });
 
@@ -86,10 +87,10 @@ export class Camera {
 
     // Q and E for zoom
     if (this.keys.has('q') || this.keys.has('Q')) {
-      this.setZoom(this.zoom * 0.98); // Zoom out
+      this.setZoom(this.zoom * CONFIG.CAMERA_KEYBOARD_ZOOM_OUT_RATE); // Zoom out
     }
     if (this.keys.has('e') || this.keys.has('E')) {
-      this.setZoom(this.zoom * 1.02); // Zoom in
+      this.setZoom(this.zoom * CONFIG.CAMERA_KEYBOARD_ZOOM_IN_RATE); // Zoom in
     }
   }
 

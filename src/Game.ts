@@ -4,6 +4,7 @@ import { PheromoneGrid } from './PheromoneGrid';
 import { Colony } from './Colony';
 import { FoodManager } from './Food';
 import { ObstacleManager } from './Obstacle';
+import { Metrics } from './Metrics';
 import * as CONFIG from './config';
 
 export class Game {
@@ -14,11 +15,14 @@ export class Game {
   private colony!: Colony;
   private foodManager!: FoodManager;
   private obstacleManager!: ObstacleManager;
+  private metrics!: Metrics;
 
   private isPaused: boolean = false;
   private simulationSpeed: number = 1;
   private worldWidth: number = CONFIG.WORLD_WIDTH;
   private worldHeight: number = CONFIG.WORLD_HEIGHT;
+  private showScoutTrails: boolean = true;
+  private showForagerTrails: boolean = true;
 
   // UI elements
   private antCountEl: HTMLElement;
@@ -26,6 +30,13 @@ export class Game {
   private spawnProgressEl: HTMLElement;
   private generationEl: HTMLElement;
   private fpsEl: HTMLElement;
+
+  // Metrics UI elements
+  private tripsPerHourEl: HTMLElement;
+  private avgTripDistEl: HTMLElement;
+  private foragingPctEl: HTMLElement;
+  private returningPctEl: HTMLElement;
+  private foodPerMinEl: HTMLElement;
 
   constructor(canvas: HTMLCanvasElement) {
     // Create PixiJS application
@@ -37,6 +48,13 @@ export class Game {
     this.spawnProgressEl = document.getElementById('spawnProgress')!;
     this.generationEl = document.getElementById('generation')!;
     this.fpsEl = document.getElementById('fps')!;
+
+    // Initialize metrics UI elements
+    this.tripsPerHourEl = document.getElementById('tripsPerHour')!;
+    this.avgTripDistEl = document.getElementById('avgTripDist')!;
+    this.foragingPctEl = document.getElementById('foragingPct')!;
+    this.returningPctEl = document.getElementById('returningPct')!;
+    this.foodPerMinEl = document.getElementById('foodPerMin')!;
 
     // Start async initialization
     this.init(canvas).catch(err => {
@@ -94,13 +112,17 @@ export class Game {
       CONFIG.PHEROMONE_CELL_SIZE
     );
 
+    // Initialize metrics
+    this.metrics = new Metrics();
+
     // Create colony at center with more initial ants
     this.colony = new Colony(
       { x: this.worldWidth / 2, y: this.worldHeight / 2 },
       this.pheromoneGrid,
       CONFIG.INITIAL_ANT_COUNT,
       this.worldWidth,
-      this.worldHeight
+      this.worldHeight,
+      this.metrics
     );
     this.worldContainer.addChild(this.colony.sprite);
     this.colony.setWorldContainer(this.worldContainer);
@@ -172,6 +194,20 @@ export class Game {
       }
       speedBtn.textContent = `Speed: ${this.simulationSpeed}x`;
     });
+
+    // Scout trail toggle
+    const scoutTrailBtn = document.getElementById('scoutTrailBtn')!;
+    scoutTrailBtn.addEventListener('click', () => {
+      this.showScoutTrails = !this.showScoutTrails;
+      scoutTrailBtn.classList.toggle('active', this.showScoutTrails);
+    });
+
+    // Forager trail toggle
+    const foragerTrailBtn = document.getElementById('foragerTrailBtn')!;
+    foragerTrailBtn.addEventListener('click', () => {
+      this.showForagerTrails = !this.showForagerTrails;
+      foragerTrailBtn.classList.toggle('active', this.showForagerTrails);
+    });
   }
 
   private gameLoop(deltaTime: number): void {
@@ -184,7 +220,7 @@ export class Game {
 
     // Update pheromone grid
     this.pheromoneGrid.update();
-    this.pheromoneGrid.render();
+    this.pheromoneGrid.render(this.showScoutTrails, this.showForagerTrails);
 
     // Update food manager
     this.foodManager.update(adjustedDelta);
@@ -192,13 +228,18 @@ export class Game {
     // Update colony (pass food sources and obstacles for sensing)
     this.colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager);
 
+    // Track metrics for all ants
+    for (const ant of this.colony.ants) {
+      this.metrics.recordStateTime(ant.state === 0, adjustedDelta); // 0 = FORAGING
+    }
+
     // Check ant-food collisions (only for ants not carrying food)
     for (const ant of this.colony.ants) {
       if (!ant.hasFood) {
-        const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
+        const nearbyFood = this.foodManager.checkCollisions(ant.position, CONFIG.ANT_FOOD_PICKUP_RADIUS);
         if (nearbyFood) {
           // Ant takes a chunk based on carrying capacity
-          const amountTaken = ant.checkFoodPickup(nearbyFood.position, 35, nearbyFood.id, nearbyFood.amount);
+          const amountTaken = ant.checkFoodPickup(nearbyFood.position, CONFIG.ANT_FOOD_PICKUP_RADIUS, nearbyFood.id, nearbyFood.amount);
           if (amountTaken > 0) {
             nearbyFood.consume(amountTaken);
           }
@@ -216,6 +257,15 @@ export class Game {
     this.spawnProgressEl.textContent = `${Math.round(this.colony.foodSinceLastSpawn * 10) / 10}/10`;
     this.generationEl.textContent = this.colony.generation.toString();
     this.fpsEl.textContent = Math.round(this.app.ticker.FPS).toString();
+
+    // Update metrics (every 30 frames for performance)
+    if (this.app.ticker.lastTime % 30 === 0) {
+      this.tripsPerHourEl.textContent = Math.round(this.metrics.getTripsPerHour()).toString();
+      this.avgTripDistEl.textContent = Math.round(this.metrics.getAverageTripDistance()).toString();
+      this.foragingPctEl.textContent = `${Math.round(this.metrics.getForagingPercentage())}%`;
+      this.returningPctEl.textContent = `${Math.round(this.metrics.getReturningPercentage())}%`;
+      this.foodPerMinEl.textContent = this.metrics.getFoodPerMinute().toFixed(1);
+    }
   }
 
   private onResize(): void {

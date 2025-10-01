@@ -2,6 +2,7 @@ import { Graphics, Container } from 'pixi.js';
 import { Entity, Vector2, AntRole } from './types';
 import { Ant } from './Ant';
 import { PheromoneGrid } from './PheromoneGrid';
+import { Metrics } from './Metrics';
 import * as CONFIG from './config';
 
 export class Colony implements Entity {
@@ -17,12 +18,14 @@ export class Colony implements Entity {
   private worldContainer: Container | null = null;
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
+  private metrics: Metrics | null = null;
 
-  constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000) {
+  constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000, metrics?: Metrics) {
     this.position = { ...position };
     this.pheromoneGrid = pheromoneGrid;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
+    this.metrics = metrics || null;
 
     // Create sprite
     this.sprite = new Container();
@@ -52,19 +55,19 @@ export class Colony implements Entity {
     this.graphics.clear();
 
     // Colony nest
-    this.graphics.circle(0, 0, 30);
+    this.graphics.circle(0, 0, CONFIG.COLONY_OUTER_RADIUS);
     this.graphics.fill({ color: 0x8b4513, alpha: 0.9 }); // Brown
 
     // Inner circle
-    this.graphics.circle(0, 0, 20);
+    this.graphics.circle(0, 0, CONFIG.COLONY_MIDDLE_RADIUS);
     this.graphics.fill({ color: 0x654321, alpha: 0.9 });
 
     // Entrance
-    this.graphics.circle(0, 0, 10);
+    this.graphics.circle(0, 0, CONFIG.COLONY_ENTRANCE_RADIUS);
     this.graphics.fill({ color: 0x000000, alpha: 0.8 });
   }
 
-  private spawnAnt(parentBrain?: any, role?: AntRole): void {
+  private spawnAnt(role?: AntRole): void {
     if (!this.worldContainer) {
       console.warn('Cannot spawn ant: worldContainer not set');
       return;
@@ -72,16 +75,16 @@ export class Colony implements Entity {
 
     // Random position around colony
     const angle = Math.random() * Math.PI * 2;
-    const distance = 35;
+    const distance = CONFIG.ANT_SPAWN_DISTANCE;
     const spawnPos = {
       x: this.position.x + Math.cos(angle) * distance,
       y: this.position.y + Math.sin(angle) * distance,
     };
 
-    // Determine role: if not specified, spawn 20% scouts, 80% foragers
-    const antRole = role || (Math.random() < 0.2 ? AntRole.SCOUT : AntRole.FORAGER);
+    // Determine role: if not specified, use CONFIG.SCOUT_SPAWN_RATIO
+    const antRole = role || (Math.random() < CONFIG.SCOUT_SPAWN_RATIO ? AntRole.SCOUT : AntRole.FORAGER);
 
-    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, parentBrain, this.worldWidth, this.worldHeight, antRole);
+    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, this.worldWidth, this.worldHeight, antRole);
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
   }
@@ -92,19 +95,14 @@ export class Colony implements Entity {
       this.foodSinceLastSpawn = 0;
       this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN; // Spawning costs food
 
-      // Choose a successful ant to reproduce from
-      const successfulAnt = this.getSuccessfulAnt();
-      if (successfulAnt) {
-        this.spawnAnt(successfulAnt.cloneBrain());
-      } else {
-        this.spawnAnt(); // Random if no successful ants yet
-      }
+      // Spawn new ant (role determined by SCOUT_SPAWN_RATIO)
+      this.spawnAnt();
     }
 
     // Update all ants every frame
     for (let i = this.ants.length - 1; i >= 0; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime, foodSources, obstacleManager);
+      ant.update(deltaTime, foodSources, obstacleManager, this.ants); // Pass all ants for traffic smoothing
 
       // Remove dead ants
       if (!ant.isAlive()) {
@@ -114,10 +112,19 @@ export class Colony implements Entity {
       }
 
       // Check if ant returned to colony with food
-      const deliveredAmount = ant.checkColonyReturn(50);
+      const deliveredAmount = ant.checkColonyReturn(CONFIG.COLONY_RETURN_RADIUS);
       if (deliveredAmount > 0) {
         this.foodStored += deliveredAmount;
         this.foodSinceLastSpawn += deliveredAmount;
+
+        // Record metrics
+        if (this.metrics) {
+          const tripDistance = Math.sqrt(
+            (ant.position.x - this.position.x) ** 2 + (ant.position.y - this.position.y) ** 2
+          );
+          this.metrics.recordTrip(tripDistance);
+          this.metrics.recordFoodDelivery(deliveredAmount);
+        }
       }
     }
 
@@ -127,26 +134,14 @@ export class Colony implements Entity {
     }
   }
 
-  private getSuccessfulAnt(): Ant | null {
-    // Find ant that has delivered the most food (inferred by lowest age and still alive)
-    // For simplicity, we'll pick a random living ant with decent energy
-    const successfulAnts = this.ants.filter(ant => ant.energy > 50 && ant.age > 200);
-
-    if (successfulAnts.length > 0) {
-      return successfulAnts[Math.floor(Math.random() * successfulAnts.length)];
-    }
-
-    return null;
-  }
-
   private advanceGeneration(): void {
     // Natural selection - remove weakest ants
     console.log(`Generation ${this.generation} → ${this.generation + 1}: Culling ${this.ants.length} ants down to top 50%`);
 
     this.ants.sort((a, b) => b.energy - a.energy);
 
-    // Keep top 50%
-    const keepCount = Math.floor(this.ants.length / 2);
+    // Keep top survivors based on config ratio
+    const keepCount = Math.floor(this.ants.length * CONFIG.GENERATION_SURVIVAL_RATIO);
     for (let i = keepCount; i < this.ants.length; i++) {
       this.ants[i].destroy();
     }

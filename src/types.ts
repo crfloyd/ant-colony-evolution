@@ -15,18 +15,6 @@ export enum AntState {
   RETURNING = 'RETURNING',
 }
 
-export interface NeuralNetworkConfig {
-  inputs: number;
-  hidden: number[];
-  outputs: number;
-}
-
-export interface AntGenome {
-  role: AntRole;
-  networkWeights: number[]; // Flattened weights
-  mutationRate: number;
-}
-
 export interface Entity {
   position: Vector2;
   sprite: Container;

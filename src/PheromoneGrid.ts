@@ -1,4 +1,5 @@
 import { Graphics, Container } from 'pixi.js';
+import * as CONFIG from './config';
 
 interface PheromoneCell {
   foodPher: number; // Laid while returning with food - leads TO food
@@ -12,8 +13,6 @@ export class PheromoneGrid {
   private cellSize: number;
   private width: number;
   private height: number;
-  private decayRate: number = 0.02; // rho: evaporation rate per tick (0.01-0.05)
-  private diffusionRate: number = 0.1; // D: diffusion rate (0.05-0.2)
   private renderFrame: number = 0;
   private updateFrame: number = 0;
 
@@ -69,7 +68,7 @@ export class PheromoneGrid {
       }
 
       this.grid[gridY][gridX][type] = Math.min(
-        10,
+        CONFIG.PHEROMONE_MAX_LEVEL,
         this.grid[gridY][gridX][type] + amount
       );
 
@@ -151,9 +150,9 @@ export class PheromoneGrid {
   }
 
   public update(): void {
-    // Only update every 3 frames for performance
+    // Only update every N frames for performance
     this.updateFrame++;
-    if (this.updateFrame % 3 !== 0) return;
+    if (this.updateFrame % CONFIG.PHEROMONE_UPDATE_INTERVAL !== 0) return;
 
     // Create temporary grids for diffusion (to avoid in-place modification issues)
     const tempFoodPher: number[][] = [];
@@ -169,8 +168,8 @@ export class PheromoneGrid {
     }
 
     // Apply evaporation and diffusion
-    const rho = this.decayRate;
-    const D = this.diffusionRate;
+    const rho = CONFIG.PHEROMONE_DECAY_RATE;
+    const D = CONFIG.PHEROMONE_DIFFUSION_RATE;
 
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
@@ -217,18 +216,22 @@ export class PheromoneGrid {
         this.grid[y][x].homePher = homeValue;
 
         // Remove very small values
-        if (this.grid[y][x].foodPher < 0.01) this.grid[y][x].foodPher = 0;
-        if (this.grid[y][x].homePher < 0.01) this.grid[y][x].homePher = 0;
+        if (this.grid[y][x].foodPher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].foodPher = 0;
+        if (this.grid[y][x].homePher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].homePher = 0;
       }
     }
   }
 
-  public render(): void {
-    // Only render pheromones every 5 frames for performance
+  public render(showScoutTrails: boolean = true, showForagerTrails: boolean = true): void {
+    // Only render pheromones every N frames for performance
     this.renderFrame++;
-    if (this.renderFrame % 5 !== 0) return;
+    if (this.renderFrame % CONFIG.PHEROMONE_RENDER_INTERVAL !== 0) return;
 
     this.graphics.clear();
+
+    // Scout trails have higher strength (CONFIG.SCOUT_HOMEPHER_STRENGTH = 4.0)
+    // Forager trails have lower strength (CONFIG.FORAGER_HOMEPHER_STRENGTH = 1.0)
+    const scoutTrailThreshold = CONFIG.PHEROMONE_SCOUT_TRAIL_THRESHOLD;
 
     // Render pheromone trails - only render strong ones
     for (let y = 0; y < this.height; y++) {
@@ -236,25 +239,42 @@ export class PheromoneGrid {
         const cell = this.grid[y][x];
 
         // Only render if there's a meaningful amount
-        if (cell.foodPher > 1.0 || cell.homePher > 1.0) {
+        if (cell.foodPher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD ||
+            cell.homePher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD) {
           const worldX = x * this.cellSize;
           const worldY = y * this.cellSize;
 
-          // Food pheromone is green (leads to food)
-          const foodAlpha = Math.min(0.15, cell.foodPher / 20);
-          if (foodAlpha > 0.05) {
+          // Food pheromone is green (leads to food) - always show
+          const foodAlpha = Math.min(CONFIG.PHEROMONE_FOOD_ALPHA_MAX,
+                                     cell.foodPher / CONFIG.PHEROMONE_FOOD_ALPHA_DIVISOR);
+          if (foodAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
             this.graphics.fill({ color: 0x00ff00, alpha: foodAlpha });
           }
 
-          // Home pheromone is blue (leads to home)
-          const homeAlpha = Math.min(0.1, cell.homePher / 20);
-          if (homeAlpha > 0.05) {
-            this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
-            this.graphics.fill({ color: 0x0066ff, alpha: homeAlpha });
+          // Home pheromone - filter by scout/forager
+          const isScoutTrail = cell.homePher > scoutTrailThreshold;
+          const shouldRenderHome = (isScoutTrail && showScoutTrails) || (!isScoutTrail && showForagerTrails);
+
+          if (shouldRenderHome) {
+            const homeAlpha = Math.min(CONFIG.PHEROMONE_HOME_ALPHA_MAX,
+                                       cell.homePher / CONFIG.PHEROMONE_HOME_ALPHA_DIVISOR);
+            if (homeAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
+              this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
+              this.graphics.fill({ color: 0x0066ff, alpha: homeAlpha });
+            }
           }
         }
       }
     }
+  }
+
+  // Debug overlay support
+  public getGrid(): PheromoneCell[][] {
+    return this.grid;
+  }
+
+  public getCellSize(): number {
+    return this.cellSize;
   }
 }

@@ -21,7 +21,17 @@
         <div class="controls">
           <button id="pauseBtn">Pause</button>
           <button id="speedBtn">Speed: 1x</button>
+          <button id="scoutTrailBtn" class="active">Scout Trails</button>
+          <button id="foragerTrailBtn" class="active">Forager Trails</button>
         </div>
+      </div>
+      <div id="metricsPanel">
+        <h3>Colony Metrics</h3>
+        <div class="metric"><span class="label">Trips/Hour:</span> <span id="tripsPerHour">0</span></div>
+        <div class="metric"><span class="label">Avg Trip Dist:</span> <span id="avgTripDist">0</span></div>
+        <div class="metric"><span class="label">Foraging:</span> <span id="foragingPct">0%</span></div>
+        <div class="metric"><span class="label">Returning:</span> <span id="returningPct">0%</span></div>
+        <div class="metric"><span class="label">Food/Min:</span> <span id="foodPerMin">0</span></div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

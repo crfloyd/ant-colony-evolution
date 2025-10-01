@@ -33,8 +33,8 @@ export class FoodSource implements Entity {
 
     // Size based on remaining amount - starts big, shrinks as consumed
     const sizeRatio = this.amount / this.maxAmount;
-    const minRadius = 5;
-    const maxRadius = 25;
+    const minRadius = CONFIG.FOOD_MIN_RADIUS;
+    const maxRadius = CONFIG.FOOD_MAX_RADIUS;
     const radius = minRadius + sizeRatio * (maxRadius - minRadius);
 
     // Food pile (circle)
@@ -76,7 +76,6 @@ export class FoodManager {
   private foodSources: FoodSource[] = [];
   private container: Container;
   private respawnTimer: number = 0;
-  private respawnInterval: number = 500; // Respawn food every 500 frames
   private worldWidth: number;
   private worldHeight: number;
   private obstacleManager: any = null;
@@ -100,12 +99,10 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // Random position, avoiding center (colony area), edges, obstacles, and high pheromone trails
+    // Random position, avoiding center (colony area), edges, obstacles, and very high pheromone trails
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
-    const minDistFromCenter = 200;
-    const margin = 50; // Keep food away from edges so ants can reach it
-    const maxFoodPherThreshold = 5.0; // Phase 3 Task 15: Avoid high foodPher areas
+    const margin = CONFIG.FOOD_SPAWN_MARGIN; // Keep food away from edges so ants can reach it
 
     let position: Vector2;
     let attempts = 0;
@@ -120,24 +117,36 @@ export class FoodManager {
       const dy = position.y - centerY;
       const distFromCenter = Math.sqrt(dx * dx + dy * dy);
 
-      // Check if position is valid (not in obstacle and far from center)
-      const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, 30);
+      // Check if position is valid
+      const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, CONFIG.FOOD_SPAWN_OBSTACLE_CHECK_RADIUS);
 
-      // Phase 3 Task 15: Check foodPher level at this position
-      let highPheromone = false;
+      // Phase 3 Task 15: Check foodPher level at this position (only avoid VERY high areas)
+      let veryHighPheromone = false;
       if (this.pheromoneGrid) {
         const foodPher = this.pheromoneGrid.getPheromoneLevel(position.x, position.y, 'foodPher');
-        highPheromone = foodPher > maxFoodPherThreshold;
+        veryHighPheromone = foodPher > CONFIG.FOOD_PHER_AVOIDANCE_THRESHOLD;
       }
 
-      if (distFromCenter >= minDistFromCenter && !inObstacle && !highPheromone) {
+      // Valid if: far enough from colony, not in obstacle, not in super high pheromone area
+      const validDistance = distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY;
+
+      if (validDistance && !inObstacle && !veryHighPheromone) {
         break;
       }
 
       attempts++;
-      if (attempts > 100) {
-        // Give up and use current position
-        break;
+      if (attempts > CONFIG.FOOD_SPAWN_MAX_ATTEMPTS_STRICT) {
+        // After many attempts, relax pheromone constraint (but still avoid obstacles and colony)
+        if (!inObstacle && distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY) {
+          break;
+        }
+      }
+
+      if (attempts > CONFIG.FOOD_SPAWN_MAX_ATTEMPTS_TOTAL) {
+        // Give up entirely - just avoid obstacles
+        if (!inObstacle) {
+          break;
+        }
       }
     } while (true);
 
@@ -158,15 +167,15 @@ export class FoodManager {
 
     // Respawn food periodically
     this.respawnTimer += deltaTime;
-    if (this.respawnTimer >= this.respawnInterval) {
+    if (this.respawnTimer >= CONFIG.FOOD_RESPAWN_INTERVAL) {
       this.respawnTimer = 0;
-      if (this.foodSources.length < 15) {
+      if (this.foodSources.length < CONFIG.MAX_FOOD_SOURCES) {
         this.spawnFood();
       }
     }
   }
 
-  public checkCollisions(position: Vector2, radius: number = 20): FoodSource | null {
+  public checkCollisions(position: Vector2, radius: number = CONFIG.FOOD_PICKUP_RADIUS): FoodSource | null {
     for (const food of this.foodSources) {
       const dx = position.x - food.position.x;
       const dy = position.y - food.position.y;

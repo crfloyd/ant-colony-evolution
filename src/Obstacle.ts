@@ -95,9 +95,10 @@ export class ObstacleManager {
       let attempts = 0;
 
       do {
+        const margin = CONFIG.OBSTACLE_SPAWN_MARGIN;
         position = {
-          x: 100 + Math.random() * (this.worldWidth - 200),
-          y: 100 + Math.random() * (this.worldHeight - 200),
+          x: margin + Math.random() * (this.worldWidth - 2 * margin),
+          y: margin + Math.random() * (this.worldHeight - 2 * margin),
         };
 
         const dx = position.x - centerX;
@@ -109,7 +110,7 @@ export class ObstacleManager {
         }
 
         attempts++;
-      } while (attempts < 50);
+      } while (attempts < CONFIG.OBSTACLE_SPAWN_MAX_ATTEMPTS);
 
       // Random size
       const width = CONFIG.MIN_OBSTACLE_SIZE + Math.random() * (CONFIG.MAX_OBSTACLE_SIZE - CONFIG.MIN_OBSTACLE_SIZE);
@@ -121,7 +122,7 @@ export class ObstacleManager {
     }
   }
 
-  public checkCollision(position: Vector2, radius: number = 10): Obstacle | null {
+  public checkCollision(position: Vector2, radius: number = CONFIG.OBSTACLE_DEFAULT_COLLISION_RADIUS): Obstacle | null {
     for (const obstacle of this.obstacles) {
       // Check if circle (ant) intersects with rectangle (obstacle)
       const closestPoint = obstacle.getClosestPointOnEdge(position.x, position.y);

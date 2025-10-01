@@ -1,6 +1,5 @@
 import { Graphics, Container } from 'pixi.js';
-import { Entity, Vector2, AntGenome, AntRole, AntState } from './types';
-import { AntBrain, GenomeFactory } from './NeuralNetwork';
+import { Entity, Vector2, AntRole, AntState } from './types';
 import { PheromoneGrid } from './PheromoneGrid';
 import * as CONFIG from './config';
 
@@ -18,9 +17,8 @@ interface RayResult {
 export class Ant implements Entity {
   public position: Vector2;
   public sprite: Container;
-  public genome: AntGenome;
   public role: AntRole = AntRole.FORAGER; // Scout or Forager
-  public energy: number = 200; // More starting energy so they live longer
+  public energy: number = CONFIG.ANT_STARTING_ENERGY;
   public state: AntState = AntState.FORAGING;
   public hasFood: boolean = false; // Keep for backward compatibility temporarily
   public age: number = 0;
@@ -29,7 +27,10 @@ export class Ant implements Entity {
   public carryCapacity: number = 1; // Max food units per trip (role-dependent)
   public trailMisses: number = 0; // Count failed trail attempts → switch to Scout
 
-  private brain: AntBrain;
+  // Lévy walk state for scouts
+  private levyStepRemaining: number = 0; // Distance left to travel in current Lévy step
+  private levyDirection: number = 0; // Current direction for Lévy step
+
   private velocity: Vector2 = { x: 0, y: 0 };
   private graphics: Graphics;
   private colony: Vector2;
@@ -57,7 +58,6 @@ export class Ant implements Entity {
     position: Vector2,
     colony: Vector2,
     pheromoneGrid: PheromoneGrid,
-    parentBrain?: AntBrain,
     worldWidth: number = 8000,
     worldHeight: number = 8000,
     role: AntRole = AntRole.FORAGER
@@ -69,25 +69,14 @@ export class Ant implements Entity {
     this.worldHeight = worldHeight;
     this.role = role;
 
-    // Create genome
-    this.genome = GenomeFactory.createGenome(role, parentBrain);
-
     // Set carry capacity based on role
     // Scouts: 1 unit (light and fast)
     // Foragers: 1-2 units (harvest trails)
     if (role === AntRole.SCOUT) {
-      this.carryCapacity = 1;
+      this.carryCapacity = CONFIG.SCOUT_CARRY_CAPACITY;
     } else {
-      this.carryCapacity = 1 + Math.floor(Math.random() * 2); // 1 or 2
-    }
-
-    // Create brain - either from parent or new random
-    const config = GenomeFactory.createWorkerConfig();
-    if (parentBrain) {
-      this.brain = parentBrain.clone();
-      this.brain.mutate(0.1);
-    } else {
-      this.brain = new AntBrain(config);
+      this.carryCapacity = CONFIG.FORAGER_MIN_CARRY_CAPACITY +
+        Math.floor(Math.random() * (CONFIG.FORAGER_MAX_CARRY_CAPACITY - CONFIG.FORAGER_MIN_CARRY_CAPACITY + 1));
     }
 
     // Create sprite
@@ -112,7 +101,7 @@ export class Ant implements Entity {
     this.graphics.clear();
 
     // Size based on role
-    const size = 5;
+    const size = CONFIG.ANT_SIZE;
 
     // Color based on role and state
     let color: number;
@@ -142,7 +131,7 @@ export class Ant implements Entity {
     const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
     if (speed > 0.5) {
       // Normalize velocity for consistent line length
-      const lineLength = 8;
+      const lineLength = CONFIG.ANT_DIRECTION_INDICATOR_LENGTH;
       const dirX = (this.velocity.x / speed) * lineLength;
       const dirY = (this.velocity.y / speed) * lineLength;
 
@@ -152,7 +141,7 @@ export class Ant implements Entity {
     }
   }
 
-  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, allAnts?: Ant[]): void {
     if (this.isDead) return;
 
     this.age += deltaTime;
@@ -161,7 +150,7 @@ export class Ant implements Entity {
     this.timeSinceLastFood += deltaTime;
 
     // Energy consumption (and cap deltaTime to prevent huge drains)
-    const cappedDelta = Math.min(deltaTime, 2);
+    const cappedDelta = Math.min(deltaTime, CONFIG.ANT_MAX_DELTA_TIME);
     this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta;
 
     if (this.energy <= 0) {
@@ -182,19 +171,28 @@ export class Ant implements Entity {
     }
 
     // Process outputs (unless in cooldown period)
-    // Neural network disabled for performance - using simple rule-based AI
+    // Using rule-based AI
     if (this.justReturnedTimer <= 0) {
-      this.processOutputs([], deltaTime, foodSources, obstacleManager);
+      this.processOutputs(deltaTime, foodSources, obstacleManager);
     }
 
-    // Calculate desired new position
-    const newX = this.position.x + this.velocity.x * deltaTime;
-    const newY = this.position.y + this.velocity.y * deltaTime;
+    // Traffic smoothing (Task 16) - slow down in crowded areas
+    let speedMultiplier = 1.0;
+    if (allAnts) {
+      const nearbyCount = this.countNearbyAnts(allAnts);
+      if (nearbyCount >= CONFIG.TRAFFIC_SLOWDOWN_THRESHOLD) {
+        speedMultiplier = CONFIG.TRAFFIC_SLOWDOWN_FACTOR;
+      }
+    }
+
+    // Calculate desired new position with traffic smoothing applied
+    const newX = this.position.x + this.velocity.x * deltaTime * speedMultiplier;
+    const newY = this.position.y + this.velocity.y * deltaTime * speedMultiplier;
 
     // ALWAYS check for obstacle collision - no exceptions
     if (obstacleManager) {
       // Use slightly larger radius to prevent corner cutting
-      const collision = obstacleManager.checkCollision({ x: newX, y: newY }, 12);
+      const collision = obstacleManager.checkCollision({ x: newX, y: newY }, CONFIG.ANT_COLLISION_RADIUS);
       if (collision) {
         // Hit obstacle - turn away from it
         if (this.followingTrail) {
@@ -223,8 +221,8 @@ export class Ant implements Entity {
               const colonyDirY = toColony.y / colonyDist;
 
               // 70% away from wall, 30% toward colony
-              const blendX = awayX * 0.7 + colonyDirX * 0.3;
-              const blendY = awayY * 0.7 + colonyDirY * 0.3;
+              const blendX = awayX * CONFIG.ANT_WALL_AVOIDANCE_BLEND_AWAY + colonyDirX * CONFIG.ANT_WALL_AVOIDANCE_BLEND_COLONY;
+              const blendY = awayY * CONFIG.ANT_WALL_AVOIDANCE_BLEND_AWAY + colonyDirY * CONFIG.ANT_WALL_AVOIDANCE_BLEND_COLONY;
               const blendDist = Math.sqrt(blendX * blendX + blendY * blendY);
 
               if (blendDist > 0) {
@@ -237,7 +235,7 @@ export class Ant implements Entity {
             }
           } else {
             // Not carrying food - just turn away with some randomness
-            const randomAngle = (Math.random() - 0.5) * 0.5; // +/- ~15 degrees
+            const randomAngle = (Math.random() - 0.5) * CONFIG.ANT_RANDOM_TURN_ANGLE_RANGE; // +/- ~15 degrees
             const cos = Math.cos(randomAngle);
             const sin = Math.sin(randomAngle);
             this.velocity.x = (awayX * cos - awayY * sin) * this.maxSpeed;
@@ -254,7 +252,7 @@ export class Ant implements Entity {
 
       // Safety check: if somehow already inside an obstacle, push out immediately
       // Use same radius as collision check to be consistent
-      const insideObstacle = obstacleManager.checkCollision(this.position, 12);
+      const insideObstacle = obstacleManager.checkCollision(this.position, CONFIG.ANT_COLLISION_RADIUS);
       if (insideObstacle) {
         // Emergency push out - use closest edge point for accurate push direction
         const closestPoint = insideObstacle.getClosestPointOnEdge(this.position.x, this.position.y);
@@ -264,7 +262,7 @@ export class Ant implements Entity {
 
         if (dist > 0.1) {
           // Push to at least 20 units away from the edge
-          const safeDist = 20;
+          const safeDist = CONFIG.ANT_SAFE_DISTANCE_FROM_OBSTACLE;
           this.position.x = closestPoint.x + (dx / dist) * safeDist;
           this.position.y = closestPoint.y + (dy / dist) * safeDist;
 
@@ -273,8 +271,8 @@ export class Ant implements Entity {
           this.velocity.y = (dy / dist) * this.maxSpeed;
         } else {
           const randomAngle = Math.random() * Math.PI * 2;
-          this.position.x += Math.cos(randomAngle) * 50;
-          this.position.y += Math.sin(randomAngle) * 50;
+          this.position.x += Math.cos(randomAngle) * CONFIG.ANT_SAFE_DISTANCE_FROM_OBSTACLE * 2.5;
+          this.position.y += Math.sin(randomAngle) * CONFIG.ANT_SAFE_DISTANCE_FROM_OBSTACLE * 2.5;
         }
         this.followingTrail = false;
       }
@@ -296,20 +294,20 @@ export class Ant implements Entity {
       const currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
 
       // Expected movement based on maxSpeed and deltaTime
-      const expectedMinMovement = this.maxSpeed * deltaTime * 0.3;
+      const expectedMinMovement = this.maxSpeed * deltaTime * CONFIG.ANT_EXPECTED_MOVEMENT_RATIO;
 
       // Stuck if: barely moving OR velocity got killed (shimmering)
-      if (distMoved < expectedMinMovement || currentSpeed < this.maxSpeed * 0.3) {
+      if (distMoved < expectedMinMovement || currentSpeed < this.maxSpeed * CONFIG.ANT_EXPECTED_MOVEMENT_RATIO) {
         this.stuckCounter += deltaTime;
       } else {
         this.stuckCounter = 0;
       }
 
       // If stuck, back up and turn - react FAST (0.5 seconds instead of 2)
-      if (this.stuckCounter > 0.5) {
+      if (this.stuckCounter > CONFIG.ANT_STUCK_THRESHOLD) {
         // Back up more aggressively
-        this.position.x -= this.velocity.x * 10;
-        this.position.y -= this.velocity.y * 10;
+        this.position.x -= this.velocity.x * CONFIG.ANT_STUCK_BACKUP_DISTANCE;
+        this.position.y -= this.velocity.y * CONFIG.ANT_STUCK_BACKUP_DISTANCE;
 
         // Turn 90-180 degrees (away from obstacle)
         const turnAngle = (Math.random() < 0.5 ? -1 : 1) * (Math.PI / 2 + Math.random() * Math.PI / 2); // 90-180 degrees
@@ -340,7 +338,7 @@ export class Ant implements Entity {
     this.lastPosition = { ...this.position };
 
     // Boundary checking - bounce off edges
-    const margin = 50;
+    const margin = CONFIG.ANT_WORLD_BOUNDARY_MARGIN;
     if (this.position.x < margin) {
       this.position.x = margin;
       this.velocity.x = Math.abs(this.velocity.x);
@@ -371,7 +369,7 @@ export class Ant implements Entity {
     // Old time-based deposit code removed
 
     // Only re-render every 10 frames to save performance
-    if (Math.floor(this.age) % 10 === 0 || this.age < 2) {
+    if (Math.floor(this.age) % CONFIG.ANT_RENDER_INTERVAL === 0 || this.age < 2) {
       this.renderAnt();
     }
   }
@@ -404,7 +402,7 @@ export class Ant implements Entity {
         result.hitObstacle = true;
         const dx = endX - this.position.x;
         const dy = endY - this.position.y;
-        result.obstacleDistance = Math.sqrt(dx * dx + dy * dy) * 0.8; // Slightly shorter to be safe
+        result.obstacleDistance = Math.sqrt(dx * dx + dy * dy) * CONFIG.FOV_OBSTACLE_DISTANCE_SAFETY; // Slightly shorter to be safe
       }
     }
 
@@ -425,7 +423,7 @@ export class Ant implements Entity {
         const foodAngle = Math.atan2(toFoodY, toFoodX);
         const angleDiff = Math.abs(foodAngle - angle);
 
-        if (angleDiff < 0.3 && foodDist < distance) { // Within ~17 degrees
+        if (angleDiff < CONFIG.FOV_ANGLE_TOLERANCE && foodDist < distance) { // Within ~17 degrees
           result.foodVisible = true;
           result.foodDistance = foodDist;
           break;
@@ -438,9 +436,9 @@ export class Ant implements Entity {
 
   /** Sense environment using FOV rays (Task 6) */
   private senseEnvironment(foodSources?: any[], obstacleManager?: any): RayResult[] {
-    const rayCount = 5; // CONFIG.FOV_RAY_COUNT
-    const fovAngle = Math.PI / 3; // CONFIG.FOV_ANGLE (60 degrees)
-    const rayDistance = 80; // CONFIG.FOV_DISTANCE
+    const rayCount = CONFIG.FOV_RAY_COUNT;
+    const fovAngle = CONFIG.FOV_ANGLE; // 60 degrees
+    const rayDistance = CONFIG.FOV_DISTANCE;
 
     const rays: RayResult[] = [];
     const currentHeading = this.lastHeading;
@@ -460,7 +458,7 @@ export class Ant implements Entity {
     if (candidates.length === 0) return this.lastHeading;
 
     // Apply softmax with temperature (higher = more random)
-    const temperature = 1.0; // Increased for more exploration
+    const temperature = CONFIG.SOFTMAX_TEMPERATURE; // Increased for more exploration
     let maxScore = -Infinity;
     for (const c of candidates) {
       if (c.score > maxScore) maxScore = c.score;
@@ -493,7 +491,7 @@ export class Ant implements Entity {
     if (!obstacleManager) return { x: 0, y: 0 };
 
     // Check nearby for obstacles
-    const checkDistance = 40;
+    const checkDistance = CONFIG.OBSTACLE_REPULSION_CHECK_DISTANCE;
     const angles = [0, Math.PI / 4, Math.PI / 2, -Math.PI / 4, -Math.PI / 2];
 
     let repulsionX = 0;
@@ -507,7 +505,7 @@ export class Ant implements Entity {
       const collision = obstacleManager.checkCollision({ x: checkX, y: checkY }, 5);
       if (collision) {
         // Add repulsion away from this direction
-        const weight = 1.0 / (checkDistance + 1);
+        const weight = 1.0 / (CONFIG.OBSTACLE_REPULSION_CHECK_DISTANCE + 1);
         repulsionX -= Math.cos(angle) * weight;
         repulsionY -= Math.sin(angle) * weight;
       }
@@ -518,9 +516,9 @@ export class Ant implements Entity {
 
   /** FORAGING behavior (Task 8) */
   private updateForagingBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // PRIORITY 1: Direct food sensing (wider range, simpler)
+    // PRIORITY 1: Direct food sensing (CONFIG.FORAGER_VISION_RANGE)
     let nearestFood: { position: Vector2; distance: number } | null = null;
-    let nearestDist = 200; // Wider detection range
+    let nearestDist = CONFIG.FORAGER_VISION_RANGE; // Standard forager vision range
 
     if (foodSources) {
       for (const food of foodSources) {
@@ -551,7 +549,7 @@ export class Ant implements Entity {
     // PRIORITY 2: Follow pheromone trails (if they exist)
     const currentPher = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher');
 
-    if (currentPher > 0.5) {
+    if (currentPher > CONFIG.FORAGING_TRAIL_MIN_LEVEL) {
       // On a trail - sample directions to follow it AWAY from colony
       const toColonyDist = Math.sqrt(
         (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
@@ -563,7 +561,7 @@ export class Ant implements Entity {
       // Sample 8 directions
       for (let i = 0; i < 8; i++) {
         const angle = (i / 8) * Math.PI * 2;
-        const checkDist = 30;
+        const checkDist = CONFIG.FORAGING_PHEROMONE_SAMPLE_DISTANCE;
         const checkX = this.position.x + Math.cos(angle) * checkDist;
         const checkY = this.position.y + Math.sin(angle) * checkDist;
 
@@ -571,7 +569,7 @@ export class Ant implements Entity {
         const distToColony = Math.sqrt((checkX - this.colony.x) ** 2 + (checkY - this.colony.y) ** 2);
 
         // Score: high pheromone + moving away from colony
-        if (pherLevel > 0.1 && distToColony > toColonyDist) {
+        if (pherLevel > CONFIG.FORAGING_TRAIL_SAMPLE_MIN && distToColony > toColonyDist) {
           const score = pherLevel;
           if (score > bestScore) {
             bestScore = score;
@@ -589,7 +587,7 @@ export class Ant implements Entity {
 
     // PRIORITY 3: Explore (no food, no trail)
     // Add occasional random turns to prevent edge hugging
-    if (Math.random() < 0.02) { // 2% chance per frame to make a big turn
+    if (Math.random() < CONFIG.FORAGING_RANDOM_TURN_PROBABILITY) { // 2% chance per frame to make a big turn
       const randomAngle = Math.random() * Math.PI * 2;
       this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
       this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
@@ -609,7 +607,7 @@ export class Ant implements Entity {
       if (!ray.hitObstacle) {
         score += 1.0;
       } else {
-        score -= 3.0; // Strong penalty
+        score -= CONFIG.FORAGING_OBSTACLE_PENALTY; // Strong penalty
       }
 
       // Prefer directions away from colony (exploration bias)
@@ -620,11 +618,11 @@ export class Ant implements Entity {
       );
 
       if (rayEndColonyDist > toColonyDist) {
-        score += 0.3; // Small bonus for moving away
+        score += CONFIG.FORAGING_EXPLORATION_BONUS; // Small bonus for moving away
       }
 
       // Very large random component for exploration to prevent edge hugging
-      score += (Math.random() - 0.5) * 4.0;
+      score += (Math.random() - 0.5) * CONFIG.FORAGING_RANDOM_COMPONENT;
 
       candidates.push({ angle: ray.angle, score });
     }
@@ -636,12 +634,12 @@ export class Ant implements Entity {
 
     // Trail reinforcement: deposit weak homePher every N steps (Task 11)
     this.stepsSinceLastHomePherDeposit++;
-    if (this.stepsSinceLastHomePherDeposit >= 8 && obstacleManager) {
+    if (this.stepsSinceLastHomePherDeposit >= CONFIG.HOME_PHER_DEPOSIT_INTERVAL && obstacleManager) {
       this.pheromoneGrid.depositPheromone(
         this.position.x,
         this.position.y,
         'homePher',
-        1,
+        CONFIG.FORAGER_HOMEPHER_STRENGTH,
         undefined,
         obstacleManager
       );
@@ -653,22 +651,52 @@ export class Ant implements Entity {
    * Lévy walk step for scouts - power-law distributed step lengths
    * Returns a step length following Lévy distribution with exponent μ
    */
-  private levyStep(mu: number = 1.7): number {
-    // Inverse transform sampling: step_length = U^(-1/(μ-1))
-    // where U is uniform random [0, 1]
+  /**
+   * Count nearby ants for traffic smoothing (Task 16)
+   */
+  private countNearbyAnts(allAnts: Ant[]): number {
+    let count = 0;
+    const radiusSq = CONFIG.TRAFFIC_DETECTION_RADIUS ** 2;
+
+    for (const other of allAnts) {
+      if (other === this || !other.isAlive()) continue;
+
+      const dx = other.position.x - this.position.x;
+      const dy = other.position.y - this.position.y;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < radiusSq) {
+        count++;
+      }
+    }
+
+    return count;
+  }
+
+  /**
+   * Lévy walk step for scouts - power-law distributed step lengths
+   * Returns a step length following Lévy distribution with exponent μ
+   */
+  private levyStep(mu: number = CONFIG.LEVY_WALK_MU): number {
+    // Lévy flight: most steps are short, occasional long jumps
+    // Use proper Lévy distribution: step ~ (1-U)^(-1/(μ-1)) scaled
     const u = Math.random();
-    const minStep = 10;
-    const maxStep = 150;
-    const rawStep = Math.pow(u, -1 / (mu - 1));
+    const minStep = CONFIG.LEVY_WALK_MIN_STEP;
+    const maxStep = CONFIG.LEVY_WALK_MAX_STEP;
+
+    // Scale factor to make distribution useful
+    const scale = CONFIG.LEVY_WALK_SCALE;
+    const rawStep = scale * Math.pow(1 - u, -1 / (mu - 1));
+
     // Clamp to reasonable bounds
     return Math.min(maxStep, Math.max(minStep, rawStep));
   }
 
   /** SCOUT behavior - Lévy walk exploration */
   private updateScoutBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // PRIORITY 1: If scout sees food, pick it up and become forager temporarily
+    // PRIORITY 1: Scouts have better vision range (CONFIG.SCOUT_VISION_RANGE)
     let nearestFood: { position: Vector2; distance: number } | null = null;
-    let nearestDist = 200;
+    let nearestDist = CONFIG.SCOUT_VISION_RANGE; // Extended scout vision range
 
     if (foodSources) {
       for (const food of foodSources) {
@@ -694,20 +722,48 @@ export class Ant implements Entity {
       return;
     }
 
-    // PRIORITY 2: Lévy walk with obstacle avoidance
-    // Occasionally pick a new direction with Lévy-distributed step length
-    if (Math.random() < 0.05) { // 5% chance per frame to pick new direction
-      const randomAngle = Math.random() * Math.PI * 2;
-      this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
-      this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
-      this.lastHeading = randomAngle;
+    // Calculate distance from colony
+    const toColonyDist = Math.sqrt(
+      (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+    );
+
+    // PRIORITY 2: Lévy walk - commit to direction for Lévy-distributed steps
+    if (this.levyStepRemaining <= 0) {
+      // Pick new Lévy step length
+      this.levyStepRemaining = this.levyStep(CONFIG.LEVY_WALK_MU);
+
+      // Bias direction away from colony (especially when close)
+      const awayFromColonyAngle = Math.atan2(
+        this.position.y - this.colony.y,
+        this.position.x - this.colony.x
+      );
+
+      if (toColonyDist < CONFIG.LEVY_COLONY_BIAS_DISTANCE) {
+        // Close to colony - strongly bias away
+        const bias = (CONFIG.LEVY_COLONY_BIAS_DISTANCE - toColonyDist) / CONFIG.LEVY_COLONY_BIAS_DISTANCE; // 0 to 1
+        const randomness = (1 - bias) * Math.PI; // Less randomness when close
+        this.levyDirection = awayFromColonyAngle + (Math.random() - 0.5) * randomness;
+      } else {
+        // Far from colony - fully random
+        this.levyDirection = Math.random() * Math.PI * 2;
+      }
     }
 
-    // Apply obstacle avoidance
+    // Continue in current Lévy direction
+    this.velocity.x = Math.cos(this.levyDirection) * this.maxSpeed;
+    this.velocity.y = Math.sin(this.levyDirection) * this.maxSpeed;
+
+    // Decrement remaining step distance
+    this.levyStepRemaining -= this.maxSpeed * deltaTime;
+
+    // Apply LIGHT obstacle avoidance (scouts take risks)
     const repulsion = this.getObstacleRepulsion(obstacleManager);
-    if (Math.abs(repulsion.x) > 0.1 || Math.abs(repulsion.y) > 0.1) {
-      this.velocity.x += repulsion.x * 0.5;
-      this.velocity.y += repulsion.y * 0.5;
+    const repulsionMag = Math.sqrt(repulsion.x ** 2 + repulsion.y ** 2);
+
+    if (repulsionMag > CONFIG.SCOUT_OBSTACLE_REPULSION_THRESHOLD) {
+      // Only avoid very close obstacles
+      this.velocity.x += repulsion.x * CONFIG.SCOUT_OBSTACLE_CORRECTION_WEIGHT; // Light correction
+      this.velocity.y += repulsion.y * CONFIG.SCOUT_OBSTACLE_CORRECTION_WEIGHT;
 
       // Normalize
       const mag = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
@@ -715,20 +771,27 @@ export class Ant implements Entity {
         this.velocity.x = (this.velocity.x / mag) * this.maxSpeed;
         this.velocity.y = (this.velocity.y / mag) * this.maxSpeed;
       }
+
+      // Only reset Lévy step if VERY close to obstacle
+      if (repulsionMag > CONFIG.SCOUT_OBSTACLE_RESET_LEVY_THRESHOLD) {
+        this.levyStepRemaining = 0;
+      }
     }
 
-    // Deposit weak homePher breadcrumbs (every 7 steps)
-    this.stepsSinceLastHomePherDeposit++;
-    if (this.stepsSinceLastHomePherDeposit >= 7 && obstacleManager) {
-      this.pheromoneGrid.depositPheromone(
-        this.position.x,
-        this.position.y,
-        'homePher',
-        0.5, // Weak breadcrumb
-        undefined,
-        obstacleManager
-      );
-      this.stepsSinceLastHomePherDeposit = 0;
+    // Only deposit homePher when far from colony (no breadcrumbs near home)
+    if (toColonyDist > CONFIG.LEVY_SCOUT_HOMEPHER_DISTANCE) {
+      this.stepsSinceLastHomePherDeposit++;
+      if (this.stepsSinceLastHomePherDeposit >= CONFIG.SCOUT_HOME_PHER_DEPOSIT_INTERVAL && obstacleManager) {
+        this.pheromoneGrid.depositPheromone(
+          this.position.x,
+          this.position.y,
+          'homePher',
+          CONFIG.SCOUT_HOMEPHER_STRENGTH, // Scout trails persist longer
+          undefined,
+          obstacleManager
+        );
+        this.stepsSinceLastHomePherDeposit = 0;
+      }
     }
   }
 
@@ -736,12 +799,12 @@ export class Ant implements Entity {
   private updateReturningBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // Deposit foodPher with trail decay gates (Task 10)
     this.stepsSinceLastFoodPherDeposit++;
-    if (this.stepsSinceLastFoodPherDeposit >= 4 && this.foodSourceId && obstacleManager) { // FOOD_PHER_DEPOSIT_INTERVAL
+    if (this.stepsSinceLastFoodPherDeposit >= CONFIG.FOOD_PHER_DEPOSIT_INTERVAL && this.foodSourceId && obstacleManager) {
       this.pheromoneGrid.depositPheromone(
         this.position.x,
         this.position.y,
         'foodPher',
-        5, // PHEROMONE_STRENGTH
+        CONFIG.PHEROMONE_STRENGTH,
         this.foodSourceId,
         obstacleManager
       );
@@ -764,12 +827,12 @@ export class Ant implements Entity {
 
     // Blend: 70% home vector, 30% homePher gradient
     const gradMag = Math.sqrt(homePherGradient.x ** 2 + homePherGradient.y ** 2);
-    let dirX = colonyDir.x * 0.7;
-    let dirY = colonyDir.y * 0.7;
+    let dirX = colonyDir.x * CONFIG.RETURNING_COLONY_WEIGHT;
+    let dirY = colonyDir.y * CONFIG.RETURNING_COLONY_WEIGHT;
 
     if (gradMag > 0.01) {
-      dirX += (homePherGradient.x / gradMag) * 0.3;
-      dirY += (homePherGradient.y / gradMag) * 0.3;
+      dirX += (homePherGradient.x / gradMag) * CONFIG.RETURNING_GRADIENT_WEIGHT;
+      dirY += (homePherGradient.y / gradMag) * CONFIG.RETURNING_GRADIENT_WEIGHT;
     }
 
     // Normalize
@@ -781,8 +844,8 @@ export class Ant implements Entity {
 
     // Apply obstacle repulsion (Task 12)
     const repulsion = this.getObstacleRepulsion(obstacleManager);
-    dirX += repulsion.x * 0.2;
-    dirY += repulsion.y * 0.2;
+    dirX += repulsion.x * CONFIG.RETURNING_OBSTACLE_REPULSION_WEIGHT;
+    dirY += repulsion.y * CONFIG.RETURNING_OBSTACLE_REPULSION_WEIGHT;
 
     // Normalize again
     const finalMag = Math.sqrt(dirX * dirX + dirY * dirY);
@@ -800,68 +863,7 @@ export class Ant implements Entity {
   // END PHASE 2 REDESIGN
   // ============================================================
 
-  private gatherInputs(foodSources?: any[]): number[] {
-    // Calculate direction to colony
-    const toColony = {
-      x: this.colony.x - this.position.x,
-      y: this.colony.y - this.position.y,
-    };
-    const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
-    const colonyDirNorm = {
-      x: colonyDist > 0 ? toColony.x / colonyDist : 0,
-      y: colonyDist > 0 ? toColony.y / colonyDist : 0,
-    };
-
-    // Find nearest food (if foraging)
-    let foodDirNorm = { x: 0, y: 0 };
-    if (this.state === AntState.FORAGING && foodSources && foodSources.length > 0) {
-      let nearestDist = Infinity;
-      let nearestFood = null;
-
-      for (const food of foodSources) {
-        const dx = food.position.x - this.position.x;
-        const dy = food.position.y - this.position.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < nearestDist && dist < 300) { // Only sense food within 300 units
-          nearestDist = dist;
-          nearestFood = { x: dx, y: dy };
-        }
-      }
-
-      if (nearestFood && nearestDist > 0) {
-        foodDirNorm.x = nearestFood.x / nearestDist;
-        foodDirNorm.y = nearestFood.y / nearestDist;
-      }
-    }
-
-    // Get pheromone gradient
-    const pheromoneType = this.state === AntState.RETURNING ? 'homePher' : 'foodPher';
-    const pheromoneGrad = this.pheromoneGrid.getPheromoneGradient(
-      this.position.x,
-      this.position.y,
-      pheromoneType
-    );
-
-    const pheromoneLevel = this.pheromoneGrid.getPheromoneLevel(
-      this.position.x,
-      this.position.y,
-      pheromoneType
-    );
-
-    return [
-      foodDirNorm.x, // Direction to nearest food
-      foodDirNorm.y,
-      colonyDirNorm.x,
-      colonyDirNorm.y,
-      pheromoneGrad.x * 5, // Amplify pheromone gradient influence
-      pheromoneGrad.y * 5,
-      this.state === AntState.RETURNING ? 1 : 0,
-      this.energy / 200, // Normalize to 0-1
-    ];
-  }
-
-  private processOutputs(outputs: number[], deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+  private processOutputs(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // Dispatch based on role and state
     if (this.state === AntState.RETURNING) {
       this.updateReturningBehavior(deltaTime, foodSources, obstacleManager);
@@ -1082,15 +1084,15 @@ export class Ant implements Entity {
       this.timeSinceLastFood = 0;
 
       // Restore small amount of energy when finding food (Phase 3 Task 14)
-      this.energy = Math.min(200, this.energy + 10);
+      this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_FOOD_PICKUP);
 
       // IMMEDIATELY move away from food source to prevent getting stuck
       // First, push away from food
       if (dist > 0.1) {
         const awayFromFoodX = dx / dist;
         const awayFromFoodY = dy / dist;
-        this.position.x = foodPosition.x + awayFromFoodX * (pickupRadius + 10);
-        this.position.y = foodPosition.y + awayFromFoodY * (pickupRadius + 10);
+        this.position.x = foodPosition.x + awayFromFoodX * (pickupRadius + CONFIG.ANT_SAFE_DISTANCE_FROM_OBSTACLE / 2);
+        this.position.y = foodPosition.y + awayFromFoodY * (pickupRadius + CONFIG.ANT_SAFE_DISTANCE_FROM_OBSTACLE / 2);
       }
 
       // Turn around toward colony when picking up food
@@ -1127,11 +1129,11 @@ export class Ant implements Entity {
       this.hasFood = false; // Keep for backward compatibility
       this.carryingAmount = 0; // Drop all food
       this.foodSourceId = null; // Clear food source ID
-      this.energy = Math.min(200, this.energy + 30); // Restore some energy
+      this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_COLONY); // Restore some energy
 
       // Push ant away from colony slightly to prevent clustering
       if (dist > 0) {
-        const pushDist = 60;
+        const pushDist = CONFIG.ANT_COLONY_PUSH_DISTANCE;
         this.position.x = this.colony.x + (dx / dist) * pushDist;
         this.position.y = this.colony.y + (dy / dist) * pushDist;
 
@@ -1140,7 +1142,7 @@ export class Ant implements Entity {
         this.velocity.y = (dy / dist) * this.maxSpeed;
 
         // Set cooldown so ant keeps moving away before other behaviors interfere
-        this.justReturnedTimer = 30; // 30 frames of free movement
+        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN; // 30 frames of free movement
         this.stuckCounter = 0; // Reset stuck counter
       }
 
@@ -1151,10 +1153,6 @@ export class Ant implements Entity {
 
   public isAlive(): boolean {
     return !this.isDead && this.energy > 0;
-  }
-
-  public cloneBrain(): AntBrain {
-    return this.brain.clone();
   }
 
   public destroy(): void {
