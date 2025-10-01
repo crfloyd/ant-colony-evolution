@@ -6,11 +6,13 @@ export class FoodSource implements Entity {
   public position: Vector2;
   public sprite: Container;
   public amount: number;
+  public id: string; // Unique ID for this food source
 
   private graphics: Graphics;
   private maxAmount: number;
 
   constructor(position: Vector2, amount: number = 50) {
+    this.id = Math.random().toString(36).substring(7); // Generate unique ID
     this.position = { ...position };
     this.amount = amount;
     this.maxAmount = amount;

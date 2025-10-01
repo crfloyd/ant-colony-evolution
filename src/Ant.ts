@@ -10,6 +10,7 @@ export class Ant implements Entity {
   public energy: number = 200; // More starting energy so they live longer
   public hasFood: boolean = false;
   public age: number = 0;
+  public foodSourceId: string | null = null; // Track which food source this ant is carrying from
 
   private brain: AntBrain;
   private velocity: Vector2 = { x: 0, y: 0 };
@@ -24,8 +25,6 @@ export class Ant implements Entity {
   private justReturnedTimer: number = 0; // Cooldown after returning food
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
-  private stuckWithFoodCounter: number = 0; // Track being stuck while carrying food
-  private escapeTimer: number = 0; // When >0, ant is escaping from being stuck
   private followingTrail: boolean = false; // Track if currently following a pheromone trail
 
   constructor(
@@ -119,14 +118,16 @@ export class Ant implements Entity {
       return;
     }
 
+    // Cap velocity at normal maxSpeed - no exceptions!
+    let currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+    if (currentSpeed > this.maxSpeed) {
+      this.velocity.x = (this.velocity.x / currentSpeed) * this.maxSpeed;
+      this.velocity.y = (this.velocity.y / currentSpeed) * this.maxSpeed;
+    }
+
     // Count down return cooldown
     if (this.justReturnedTimer > 0) {
       this.justReturnedTimer -= deltaTime;
-    }
-
-    // Count down escape timer
-    if (this.escapeTimer > 0) {
-      this.escapeTimer -= deltaTime;
     }
 
     // Process outputs (unless in cooldown period)
@@ -135,170 +136,154 @@ export class Ant implements Entity {
       this.processOutputs([], deltaTime, foodSources, obstacleManager);
     }
 
-    // Update position FIRST
+    // Calculate desired new position
     const newX = this.position.x + this.velocity.x * deltaTime;
     const newY = this.position.y + this.velocity.y * deltaTime;
 
-    // Check for obstacle collision (but SKIP if following a trail - trail is already valid)
-    if (obstacleManager && !this.followingTrail) {
-      const collision = obstacleManager.checkCollision({ x: newX, y: newY }, 10);
+    // ALWAYS check for obstacle collision - no exceptions
+    if (obstacleManager) {
+      // Use slightly larger radius to prevent corner cutting
+      const collision = obstacleManager.checkCollision({ x: newX, y: newY }, 12);
       if (collision) {
-        // Hit an obstacle - reflect away from obstacle center
-        const toObstacle = {
-          x: collision.position.x - this.position.x,
-          y: collision.position.y - this.position.y,
-        };
-        const dist = Math.sqrt(toObstacle.x * toObstacle.x + toObstacle.y * toObstacle.y);
-
-        if (dist > 0) {
-          // Bounce away from obstacle
-          const awayX = -toObstacle.x / dist;
-          const awayY = -toObstacle.y / dist;
-
-          // Add some randomness to avoid perfect bouncing
-          const randomAngle = (Math.random() - 0.5) * Math.PI * 0.5; // +/- 45 degrees
-          const cos = Math.cos(randomAngle);
-          const sin = Math.sin(randomAngle);
-
-          this.velocity.x = (awayX * cos - awayY * sin) * this.maxSpeed;
-          this.velocity.y = (awayX * sin + awayY * cos) * this.maxSpeed;
+        // Hit obstacle - turn away from it
+        if (this.followingTrail) {
+          this.followingTrail = false;
         }
 
-        // Don't update position, stay where we are
-        // The stuck detection will help if we get truly stuck
+        // Get direction away from the EDGE, not center (important for rectangular corners!)
+        const closestPoint = collision.getClosestPointOnEdge(this.position.x, this.position.y);
+        const awayFromEdgeX = this.position.x - closestPoint.x;
+        const awayFromEdgeY = this.position.y - closestPoint.y;
+        const dist = Math.sqrt(awayFromEdgeX * awayFromEdgeX + awayFromEdgeY * awayFromEdgeY);
+
+        if (dist > 0.1) {
+          const awayX = awayFromEdgeX / dist;
+          const awayY = awayFromEdgeY / dist;
+
+          // If carrying food, blend away direction with colony direction
+          if (this.hasFood) {
+            const toColony = {
+              x: this.colony.x - this.position.x,
+              y: this.colony.y - this.position.y,
+            };
+            const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
+            if (colonyDist > 0) {
+              const colonyDirX = toColony.x / colonyDist;
+              const colonyDirY = toColony.y / colonyDist;
+
+              // 70% away from wall, 30% toward colony
+              const blendX = awayX * 0.7 + colonyDirX * 0.3;
+              const blendY = awayY * 0.7 + colonyDirY * 0.3;
+              const blendDist = Math.sqrt(blendX * blendX + blendY * blendY);
+
+              if (blendDist > 0) {
+                this.velocity.x = (blendX / blendDist) * this.maxSpeed;
+                this.velocity.y = (blendY / blendDist) * this.maxSpeed;
+              }
+            } else {
+              this.velocity.x = awayX * this.maxSpeed;
+              this.velocity.y = awayY * this.maxSpeed;
+            }
+          } else {
+            // Not carrying food - just turn away with some randomness
+            const randomAngle = (Math.random() - 0.5) * 0.5; // +/- ~15 degrees
+            const cos = Math.cos(randomAngle);
+            const sin = Math.sin(randomAngle);
+            this.velocity.x = (awayX * cos - awayY * sin) * this.maxSpeed;
+            this.velocity.y = (awayX * sin + awayY * cos) * this.maxSpeed;
+          }
+        }
+
+        // Don't update position - collision prevents movement
       } else {
-        // No collision, update position
+        // Safe to move
         this.position.x = newX;
         this.position.y = newY;
       }
-    } else {
-      // Following trail or no obstacle manager - just update position
-      this.position.x = newX;
-      this.position.y = newY;
-    }
 
-    // Safety check: if somehow inside an obstacle, push out (only when NOT following trail)
-    if (obstacleManager && !this.followingTrail) {
-      const insideObstacle = obstacleManager.checkCollision(this.position, 10);
+      // Safety check: if somehow already inside an obstacle, push out immediately
+      // Use same radius as collision check to be consistent
+      const insideObstacle = obstacleManager.checkCollision(this.position, 12);
       if (insideObstacle) {
-        // Push ant away from obstacle center
-        const dx = this.position.x - insideObstacle.position.x;
-        const dy = this.position.y - insideObstacle.position.y;
+        // Emergency push out - use closest edge point for accurate push direction
+        const closestPoint = insideObstacle.getClosestPointOnEdge(this.position.x, this.position.y);
+        const dx = this.position.x - closestPoint.x;
+        const dy = this.position.y - closestPoint.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist > 0) {
-          // Push to edge of obstacle plus margin
-          const pushDist = Math.max(insideObstacle.width, insideObstacle.height) / 2 + 20;
-          this.position.x = insideObstacle.position.x + (dx / dist) * pushDist;
-          this.position.y = insideObstacle.position.y + (dy / dist) * pushDist;
+        if (dist > 0.1) {
+          // Push to at least 20 units away from the edge
+          const safeDist = 20;
+          this.position.x = closestPoint.x + (dx / dist) * safeDist;
+          this.position.y = closestPoint.y + (dy / dist) * safeDist;
+
+          // Set velocity away from obstacle
+          this.velocity.x = (dx / dist) * this.maxSpeed;
+          this.velocity.y = (dy / dist) * this.maxSpeed;
         } else {
-          // Directly on center, push randomly
           const randomAngle = Math.random() * Math.PI * 2;
           this.position.x += Math.cos(randomAngle) * 50;
           this.position.y += Math.sin(randomAngle) * 50;
         }
-
-        // Random velocity after being pushed
-        const randomAngle = Math.random() * Math.PI * 2;
-        this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
-        this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
+        this.followingTrail = false;
       }
+    } else {
+      // No obstacle manager - just update position
+      this.position.x = newX;
+      this.position.y = newY;
     }
 
 
-    // THEN check if ant is stuck (hasn't moved much) - but not during cooldown or following trail
-    if (this.justReturnedTimer <= 0 && !this.followingTrail) {
+    // THEN check if ant is stuck - but not during cooldown
+    if (this.justReturnedTimer <= 0) {
       const distMoved = Math.sqrt(
         (this.position.x - this.lastPosition.x) ** 2 +
         (this.position.y - this.lastPosition.y) ** 2
       );
 
+      // Check current velocity magnitude (detect shimmering)
+      const currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+
       // Expected movement based on maxSpeed and deltaTime
-      const expectedMinMovement = this.maxSpeed * deltaTime * 0.3; // Should move at least 30% of max
+      const expectedMinMovement = this.maxSpeed * deltaTime * 0.3;
 
-      if (distMoved < expectedMinMovement) {
+      // Stuck if: barely moving OR velocity got killed (shimmering)
+      if (distMoved < expectedMinMovement || currentSpeed < this.maxSpeed * 0.3) {
         this.stuckCounter += deltaTime;
-
-        // Track if stuck while carrying food (this is critical - creates pheromone trap)
-        if (this.hasFood && !this.followingTrail) {
-          this.stuckWithFoodCounter += deltaTime;
-        }
       } else {
         this.stuckCounter = 0;
-        this.stuckWithFoodCounter = 0;
       }
 
-      // If stuck with food, actively search for a way around the obstacle
-      if (this.stuckWithFoodCounter > 2) {
-        // Try to find a clear direction by sampling around
-        const toColony = {
-          x: this.colony.x - this.position.x,
-          y: this.colony.y - this.position.y,
-        };
-        const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
-        const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 1, y: 0 };
+      // If stuck, back up and turn - react FAST (0.5 seconds instead of 2)
+      if (this.stuckCounter > 0.5) {
+        // Back up more aggressively
+        this.position.x -= this.velocity.x * 10;
+        this.position.y -= this.velocity.y * 10;
 
-        // Sample 8 directions around the ant
-        let bestDir = null;
-        let bestScore = -Infinity;
-        const checkDist = 60;
+        // Turn 90-180 degrees (away from obstacle)
+        const turnAngle = (Math.random() < 0.5 ? -1 : 1) * (Math.PI / 2 + Math.random() * Math.PI / 2); // 90-180 degrees
+        const cos = Math.cos(turnAngle);
+        const sin = Math.sin(turnAngle);
+        const newVelX = this.velocity.x * cos - this.velocity.y * sin;
+        const newVelY = this.velocity.x * sin + this.velocity.y * cos;
+        this.velocity.x = newVelX;
+        this.velocity.y = newVelY;
 
-        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
-          const dirX = Math.cos(angle);
-          const dirY = Math.sin(angle);
-
-          const checkPos = {
-            x: this.position.x + dirX * checkDist,
-            y: this.position.y + dirY * checkDist,
-          };
-
-          // Check if this direction is clear
-          const blocked = obstacleManager && obstacleManager.checkCollision(checkPos, 10);
-
-          if (!blocked) {
-            // Score based on how much it aligns with colony direction
-            const score = dirX * colonyDir.x + dirY * colonyDir.y;
-            if (score > bestScore) {
-              bestScore = score;
-              bestDir = { x: dirX, y: dirY };
-            }
-          }
-        }
-
-        if (bestDir) {
-          // Found a clear direction - move that way
-          this.velocity.x = bestDir.x * this.maxSpeed * 1.5;
-          this.velocity.y = bestDir.y * this.maxSpeed * 1.5;
-          this.escapeTimer = 15; // Move in this direction for a bit
+        // Normalize to full speed
+        const velMag = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+        if (velMag > 0.1) {
+          this.velocity.x = (this.velocity.x / velMag) * this.maxSpeed;
+          this.velocity.y = (this.velocity.y / velMag) * this.maxSpeed;
         } else {
-          // No clear direction found - back up
-          this.velocity.x = -this.velocity.x * 1.5;
-          this.velocity.y = -this.velocity.y * 1.5;
-          this.escapeTimer = 10;
+          // Random direction if velocity is zero
+          const randomAngle = Math.random() * Math.PI * 2;
+          this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
+          this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
         }
 
-        this.stuckWithFoodCounter = 0;
         this.stuckCounter = 0;
-
-        // Immediately apply this movement
-        this.position.x += this.velocity.x * deltaTime;
-        this.position.y += this.velocity.y * deltaTime;
-      } else if (this.stuckCounter > 5) {
-        // If stuck for too long (accumulated time), break free
-        // Give a strong random velocity to break free
-        const randomAngle = Math.random() * Math.PI * 2;
-        this.velocity.x = Math.cos(randomAngle) * this.maxSpeed * 1.5;
-        this.velocity.y = Math.sin(randomAngle) * this.maxSpeed * 1.5;
-        this.stuckCounter = 0;
-
-        // Immediately apply this movement
-        this.position.x += this.velocity.x * deltaTime;
-        this.position.y += this.velocity.y * deltaTime;
+        this.followingTrail = false; // Abandon trail if stuck
       }
-    } else if (this.followingTrail) {
-      // Following trail - reset stuck counters
-      this.stuckCounter = 0;
-      this.stuckWithFoodCounter = 0;
     }
 
     this.lastPosition = { ...this.position };
@@ -326,20 +311,21 @@ export class Ant implements Entity {
     this.sprite.x = this.position.x;
     this.sprite.y = this.position.y;
 
-    // Drop pheromones - when carrying food back AND not stuck AND moving
+    // Drop pheromones - FREQUENTLY when carrying food back
     this.pheromoneTimer += deltaTime;
-    if (this.pheromoneTimer > 2) {
+    if (this.pheromoneTimer > 0.5) { // Drop every 0.5 frames instead of 2 - much denser trail!
       this.pheromoneTimer = 0;
-      // Only drop if: has food, not stuck, not escaping, and actually moving
-      const isMoving = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y) > 1;
-      if (this.hasFood && this.stuckWithFoodCounter < 1 && this.escapeTimer <= 0 && isMoving) {
-        // Drop "food this way" trail when returning to colony
-        // Drop even near obstacles - successful paths need complete trails!
+      // Drop trail when carrying food and actually moving
+      const isMoving = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y) > 0.5;
+      if (this.hasFood && isMoving && this.foodSourceId) {
+        // Drop pheromone, but it will be rejected if the grid cell overlaps with an obstacle
         this.pheromoneGrid.depositPheromone(
           this.position.x,
           this.position.y,
           'foodTrail',
-          5
+          5,
+          this.foodSourceId,
+          obstacleManager
         );
       }
     }
@@ -412,19 +398,14 @@ export class Ant implements Entity {
   }
 
   private processOutputs(outputs: number[], deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // ESCAPE MODE: If escape timer is active, just keep current velocity (moving away from walls)
-    if (this.escapeTimer > 0) {
-      // Keep moving in escape direction, don't change velocity
-      return;
-    }
-
     // SIMPLE RULE 1: Carrying food? Follow existing trail home OR navigate if no trail.
     if (this.hasFood) {
-      // Use pheromone gradient (much faster than checking 9 cells)
+      // Use pheromone gradient for this specific food source
       const gradient = this.pheromoneGrid.getPheromoneGradient(
         this.position.x,
         this.position.y,
-        'foodTrail'
+        'foodTrail',
+        this.foodSourceId || undefined
       );
 
       // Check if gradient points toward colony
@@ -439,19 +420,19 @@ export class Ant implements Entity {
       const alignment = gradient.x * colonyDir.x + gradient.y * colonyDir.y;
       const gradMag = Math.sqrt(gradient.x * gradient.x + gradient.y * gradient.y);
 
-      // Check current pheromone level - if strong trail exists, follow it
+      // Check current pheromone level - if ANY trail exists, follow it
       const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodTrail');
 
-      // If there's a strong trail (gradient exists) and it leads toward colony
-      if (currentLevel > 2.0 && gradMag > 0.1 && alignment > 0.3) {
-        // Strong trail exists - follow it blindly! No need to check obstacles, trail is already valid
+      // If there's ANY trail (even weak) that leads toward colony, follow it
+      if (currentLevel > 1.0 && gradMag > 0.05 && alignment > 0.2) {
+        // Trail exists - follow the gradient blindly, trust the path!
         this.followingTrail = true;
         this.velocity.x = gradient.x * this.maxSpeed;
         this.velocity.y = gradient.y * this.maxSpeed;
         return;
       }
 
-      // No strong trail found - need to navigate
+      // No trail found - need to navigate
       this.followingTrail = false;
 
       // No trail exists - be the first ant and navigate with obstacle avoidance
@@ -507,7 +488,51 @@ export class Ant implements Entity {
       return;
     }
 
-    // SIMPLE RULE 2: Can see food? Head to food
+    // SIMPLE RULE 2: Smell "food trail" pheromones? Follow them AWAY from colony.
+    // Check pheromone level at current position
+    const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodTrail');
+
+    if (currentLevel > 0.2) {
+      // On a trail! Sample 8 directions to find where it leads
+      const cellSize = 20;
+      let bestDir = null;
+      let bestScore = -Infinity;
+
+      const currentDistToColony = Math.sqrt(
+        (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+      );
+
+      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+        const dirX = Math.cos(angle);
+        const dirY = Math.sin(angle);
+        const checkX = this.position.x + dirX * cellSize;
+        const checkY = this.position.y + dirY * cellSize;
+
+        const level = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodTrail');
+
+        // Check if this direction leads away from colony
+        const distToColonyFromCheck = Math.sqrt(
+          (checkX - this.colony.x) ** 2 + (checkY - this.colony.y) ** 2
+        );
+
+        // We want: high pheromone level AND leading away from colony
+        if (level > 0.1 && distToColonyFromCheck > currentDistToColony) {
+          const score = level; // Prefer higher pheromone concentrations
+          if (score > bestScore) {
+            bestScore = score;
+            bestDir = { x: dirX, y: dirY };
+          }
+        }
+      }
+
+      if (bestDir) {
+        this.velocity.x = bestDir.x * this.maxSpeed;
+        this.velocity.y = bestDir.y * this.maxSpeed;
+        return;
+      }
+    }
+
+    // SIMPLE RULE 3: Can see food? Head directly to food
     if (foodSources && foodSources.length > 0) {
       let nearestFood = null;
       let nearestDist = 300;
@@ -533,31 +558,6 @@ export class Ant implements Entity {
       }
     }
 
-    // SIMPLE RULE 3: Smell "food trail" pheromones? Follow them AWAY from colony.
-    const gradient = this.pheromoneGrid.getPheromoneGradient(
-      this.position.x,
-      this.position.y,
-      'foodTrail'
-    );
-
-    const toColony = {
-      x: this.colony.x - this.position.x,
-      y: this.colony.y - this.position.y,
-    };
-    const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
-    const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 0, y: 0 };
-
-    // Dot product: if gradient points AWAY from colony, follow it
-    const alignment = gradient.x * colonyDir.x + gradient.y * colonyDir.y;
-    const gradMag = Math.sqrt(gradient.x * gradient.x + gradient.y * gradient.y);
-
-    // Follow if trail leads away from colony (negative alignment)
-    if (gradMag > 0.1 && alignment < -0.3) {
-      this.velocity.x = gradient.x * this.maxSpeed;
-      this.velocity.y = gradient.y * this.maxSpeed;
-      return;
-    }
-
     // SIMPLE RULE 4: No food, no smell? Wander randomly.
     const randomAngle = (Math.random() - 0.5) * 0.3;
     const cos = Math.cos(randomAngle);
@@ -578,7 +578,7 @@ export class Ant implements Entity {
     }
   }
 
-  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20): boolean {
+  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string): boolean {
     if (this.hasFood) return false;
 
     const dx = this.position.x - foodPosition.x;
@@ -587,6 +587,7 @@ export class Ant implements Entity {
 
     if (dist < pickupRadius) {
       this.hasFood = true;
+      this.foodSourceId = foodSourceId || null; // Remember which food source this came from
 
       // IMMEDIATELY move away from food source to prevent getting stuck
       // First, push away from food
@@ -604,13 +605,12 @@ export class Ant implements Entity {
       };
       const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
       if (colonyDist > 0) {
-        this.velocity.x = (toColony.x / colonyDist) * this.maxSpeed * 1.5;
-        this.velocity.y = (toColony.y / colonyDist) * this.maxSpeed * 1.5;
+        this.velocity.x = (toColony.x / colonyDist) * this.maxSpeed;
+        this.velocity.y = (toColony.y / colonyDist) * this.maxSpeed;
       }
 
       // Reset stuck counters
       this.stuckCounter = 0;
-      this.stuckWithFoodCounter = 0;
 
       return true;
     }
@@ -626,6 +626,7 @@ export class Ant implements Entity {
 
     if (dist < returnRadius) {
       this.hasFood = false;
+      this.foodSourceId = null; // Clear food source ID
       this.energy = Math.min(200, this.energy + 40); // Restore some energy
 
       // Push ant away from colony slightly to prevent clustering
@@ -634,9 +635,9 @@ export class Ant implements Entity {
         this.position.x = this.colony.x + (dx / dist) * pushDist;
         this.position.y = this.colony.y + (dy / dist) * pushDist;
 
-        // Give it strong outward velocity
-        this.velocity.x = (dx / dist) * this.maxSpeed * 1.5;
-        this.velocity.y = (dy / dist) * this.maxSpeed * 1.5;
+        // Give it outward velocity
+        this.velocity.x = (dx / dist) * this.maxSpeed;
+        this.velocity.y = (dy / dist) * this.maxSpeed;
 
         // Set cooldown so ant keeps moving away before other behaviors interfere
         this.justReturnedTimer = 30; // 30 frames of free movement

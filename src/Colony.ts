@@ -17,7 +17,6 @@ export class Colony implements Entity {
   private worldContainer: Container | null = null;
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
-  private updateOffset: number = 0; // For staggered updates
 
   constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000) {
     this.position = { ...position };
@@ -99,14 +98,10 @@ export class Colony implements Entity {
       }
     }
 
-    // Update ants in batches - only update 1/3 of ants per frame for performance
-    const batchSize = Math.ceil(this.ants.length / 3);
-    const startIdx = this.updateOffset;
-    const endIdx = Math.min(startIdx + batchSize, this.ants.length);
-
-    for (let i = endIdx - 1; i >= startIdx; i--) {
+    // Update all ants every frame
+    for (let i = this.ants.length - 1; i >= 0; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime * 3, foodSources, obstacleManager); // Multiply deltaTime to compensate for skipped frames
+      ant.update(deltaTime, foodSources, obstacleManager);
 
       // Remove dead ants
       if (!ant.isAlive()) {
@@ -121,9 +116,6 @@ export class Colony implements Entity {
         this.foodSinceLastSpawn += 1;
       }
     }
-
-    // Move to next batch
-    this.updateOffset = (endIdx >= this.ants.length) ? 0 : endIdx;
 
     // Check for generation advancement (only when population is too large)
     if (this.ants.length > CONFIG.MAX_ANT_COUNT) {

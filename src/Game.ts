@@ -195,7 +195,7 @@ export class Game {
     for (const ant of this.colony.ants) {
       if (!ant.hasFood) {
         const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
-        if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35)) {
+        if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35, nearbyFood.id)) {
           nearbyFood.consume(1);
         }
       }
