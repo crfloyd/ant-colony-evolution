@@ -112,12 +112,13 @@ export class Game {
       this.worldHeight
     );
 
-    // Initialize food manager (pass obstacles so food doesn't spawn inside them)
+    // Initialize food manager (pass obstacles and pheromone grid for spawn avoidance)
     this.foodManager = new FoodManager(
       this.worldContainer,
       this.worldWidth,
       this.worldHeight,
-      this.obstacleManager
+      this.obstacleManager,
+      this.pheromoneGrid
     );
 
     // Draw world boundaries
@@ -195,8 +196,12 @@ export class Game {
     for (const ant of this.colony.ants) {
       if (!ant.hasFood) {
         const nearbyFood = this.foodManager.checkCollisions(ant.position, 35);
-        if (nearbyFood && ant.checkFoodPickup(nearbyFood.position, 35, nearbyFood.id)) {
-          nearbyFood.consume(1);
+        if (nearbyFood) {
+          // Ant takes a chunk based on carrying capacity
+          const amountTaken = ant.checkFoodPickup(nearbyFood.position, 35, nearbyFood.id, nearbyFood.amount);
+          if (amountTaken > 0) {
+            nearbyFood.consume(amountTaken);
+          }
         }
       }
     }
@@ -208,7 +213,7 @@ export class Game {
   private updateUI(): void {
     this.antCountEl.textContent = this.colony.getAntCount().toString();
     this.foodCountEl.textContent = Math.floor(this.colony.foodStored).toString();
-    this.spawnProgressEl.textContent = `${this.colony.foodSinceLastSpawn}/10`;
+    this.spawnProgressEl.textContent = `${Math.round(this.colony.foodSinceLastSpawn * 10) / 10}/10`;
     this.generationEl.textContent = this.colony.generation.toString();
     this.fpsEl.textContent = Math.round(this.app.ticker.FPS).toString();
   }

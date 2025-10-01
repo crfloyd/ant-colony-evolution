@@ -1,8 +1,8 @@
 import { Graphics, Container } from 'pixi.js';
 
 interface PheromoneCell {
-  foodTrail: number;
-  exploration: number;
+  foodPher: number; // Laid while returning with food - leads TO food
+  homePher: number; // Laid while leaving colony - leads TO home
   foodSourceId: string | null; // Track which food source this trail leads to
 }
 
@@ -12,7 +12,8 @@ export class PheromoneGrid {
   private cellSize: number;
   private width: number;
   private height: number;
-  private decayRate: number = 0.998; // Pheromones decay slower
+  private decayRate: number = 0.02; // rho: evaporation rate per tick (0.01-0.05)
+  private diffusionRate: number = 0.1; // D: diffusion rate (0.05-0.2)
   private renderFrame: number = 0;
   private updateFrame: number = 0;
 
@@ -31,7 +32,7 @@ export class PheromoneGrid {
     for (let y = 0; y < this.height; y++) {
       this.grid[y] = [];
       for (let x = 0; x < this.width; x++) {
-        this.grid[y][x] = { foodTrail: 0, exploration: 0, foodSourceId: null };
+        this.grid[y][x] = { foodPher: 0, homePher: 0, foodSourceId: null };
       }
     }
 
@@ -43,7 +44,7 @@ export class PheromoneGrid {
   public depositPheromone(
     x: number,
     y: number,
-    type: 'foodTrail' | 'exploration',
+    type: 'foodPher' | 'homePher',
     amount: number = 1,
     foodSourceId?: string,
     obstacleManager?: any
@@ -72,8 +73,8 @@ export class PheromoneGrid {
         this.grid[gridY][gridX][type] + amount
       );
 
-      // Set food source ID if provided (for food trails)
-      if (type === 'foodTrail' && foodSourceId) {
+      // Set food source ID if provided (for food pheromones)
+      if (type === 'foodPher' && foodSourceId) {
         this.grid[gridY][gridX].foodSourceId = foodSourceId;
       }
     }
@@ -82,7 +83,7 @@ export class PheromoneGrid {
   public getPheromoneLevel(
     x: number,
     y: number,
-    type: 'foodTrail' | 'exploration'
+    type: 'foodPher' | 'homePher'
   ): number {
     const gridX = Math.floor(x / this.cellSize);
     const gridY = Math.floor(y / this.cellSize);
@@ -96,7 +97,7 @@ export class PheromoneGrid {
   public getPheromoneGradient(
     x: number,
     y: number,
-    type: 'foodTrail' | 'exploration',
+    type: 'foodPher' | 'homePher',
     foodSourceId?: string
   ): { x: number; y: number } {
     const gridX = Math.floor(x / this.cellSize);
@@ -150,20 +151,74 @@ export class PheromoneGrid {
   }
 
   public update(): void {
-    // Only decay every 3 frames for performance
+    // Only update every 3 frames for performance
     this.updateFrame++;
     if (this.updateFrame % 3 !== 0) return;
 
-    // Decay all pheromones
-    const decayFactor = Math.pow(this.decayRate, 3); // Compensate for skipped frames
+    // Create temporary grids for diffusion (to avoid in-place modification issues)
+    const tempFoodPher: number[][] = [];
+    const tempHomePher: number[][] = [];
+
+    for (let y = 0; y < this.height; y++) {
+      tempFoodPher[y] = [];
+      tempHomePher[y] = [];
+      for (let x = 0; x < this.width; x++) {
+        tempFoodPher[y][x] = this.grid[y][x].foodPher;
+        tempHomePher[y][x] = this.grid[y][x].homePher;
+      }
+    }
+
+    // Apply evaporation and diffusion
+    const rho = this.decayRate;
+    const D = this.diffusionRate;
+
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
-        this.grid[y][x].foodTrail *= decayFactor;
-        this.grid[y][x].exploration *= decayFactor;
+        // Evaporation: grid *= (1 - rho)
+        let foodValue = this.grid[y][x].foodPher * (1 - rho);
+        let homeValue = this.grid[y][x].homePher * (1 - rho);
+
+        // Diffusion: grid = (1 - D)*grid + D*avg(neighbors)
+        // Calculate average of 4-connected neighbors
+        let foodNeighborSum = 0;
+        let homeNeighborSum = 0;
+        let neighborCount = 0;
+
+        if (this.isValidCell(x - 1, y)) {
+          foodNeighborSum += tempFoodPher[y][x - 1];
+          homeNeighborSum += tempHomePher[y][x - 1];
+          neighborCount++;
+        }
+        if (this.isValidCell(x + 1, y)) {
+          foodNeighborSum += tempFoodPher[y][x + 1];
+          homeNeighborSum += tempHomePher[y][x + 1];
+          neighborCount++;
+        }
+        if (this.isValidCell(x, y - 1)) {
+          foodNeighborSum += tempFoodPher[y - 1][x];
+          homeNeighborSum += tempHomePher[y - 1][x];
+          neighborCount++;
+        }
+        if (this.isValidCell(x, y + 1)) {
+          foodNeighborSum += tempFoodPher[y + 1][x];
+          homeNeighborSum += tempHomePher[y + 1][x];
+          neighborCount++;
+        }
+
+        if (neighborCount > 0) {
+          const foodAvg = foodNeighborSum / neighborCount;
+          const homeAvg = homeNeighborSum / neighborCount;
+
+          foodValue = (1 - D) * foodValue + D * foodAvg;
+          homeValue = (1 - D) * homeValue + D * homeAvg;
+        }
+
+        this.grid[y][x].foodPher = foodValue;
+        this.grid[y][x].homePher = homeValue;
 
         // Remove very small values
-        if (this.grid[y][x].foodTrail < 0.01) this.grid[y][x].foodTrail = 0;
-        if (this.grid[y][x].exploration < 0.01) this.grid[y][x].exploration = 0;
+        if (this.grid[y][x].foodPher < 0.01) this.grid[y][x].foodPher = 0;
+        if (this.grid[y][x].homePher < 0.01) this.grid[y][x].homePher = 0;
       }
     }
   }
@@ -181,22 +236,22 @@ export class PheromoneGrid {
         const cell = this.grid[y][x];
 
         // Only render if there's a meaningful amount
-        if (cell.foodTrail > 1.0 || cell.exploration > 1.0) {
+        if (cell.foodPher > 1.0 || cell.homePher > 1.0) {
           const worldX = x * this.cellSize;
           const worldY = y * this.cellSize;
 
-          // Food trail is green (very faint)
-          const foodAlpha = Math.min(0.15, cell.foodTrail / 20);
+          // Food pheromone is green (leads to food)
+          const foodAlpha = Math.min(0.15, cell.foodPher / 20);
           if (foodAlpha > 0.05) {
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
             this.graphics.fill({ color: 0x00ff00, alpha: foodAlpha });
           }
 
-          // Exploration trail is blue (even fainter)
-          const explorationAlpha = Math.min(0.1, cell.exploration / 20);
-          if (explorationAlpha > 0.05) {
+          // Home pheromone is blue (leads to home)
+          const homeAlpha = Math.min(0.1, cell.homePher / 20);
+          if (homeAlpha > 0.05) {
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
-            this.graphics.fill({ color: 0x0066ff, alpha: explorationAlpha });
+            this.graphics.fill({ color: 0x0066ff, alpha: homeAlpha });
           }
         }
       }

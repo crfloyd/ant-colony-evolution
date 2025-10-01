@@ -111,9 +111,10 @@ export class Colony implements Entity {
       }
 
       // Check if ant returned to colony with food
-      if (ant.checkColonyReturn(50)) {
-        this.foodStored += 1;
-        this.foodSinceLastSpawn += 1;
+      const deliveredAmount = ant.checkColonyReturn(50);
+      if (deliveredAmount > 0) {
+        this.foodStored += deliveredAmount;
+        this.foodSinceLastSpawn += deliveredAmount;
       }
     }
 

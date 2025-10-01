@@ -1,16 +1,31 @@
 import { Graphics, Container } from 'pixi.js';
-import { Entity, Vector2, AntGenome, AntRole } from './types';
+import { Entity, Vector2, AntGenome, AntRole, AntState } from './types';
 import { AntBrain, GenomeFactory } from './NeuralNetwork';
 import { PheromoneGrid } from './PheromoneGrid';
+import * as CONFIG from './config';
+
+/** Data structure for FOV ray results (Phase 2 Task 6) */
+interface RayResult {
+  angle: number; // Angle in radians
+  hitObstacle: boolean;
+  obstacleDistance: number;
+  foodPher: number; // Pheromone level at ray end
+  homePher: number;
+  foodVisible: boolean; // Is food visible along this ray
+  foodDistance: number;
+}
 
 export class Ant implements Entity {
   public position: Vector2;
   public sprite: Container;
   public genome: AntGenome;
   public energy: number = 200; // More starting energy so they live longer
-  public hasFood: boolean = false;
+  public state: AntState = AntState.FORAGING;
+  public hasFood: boolean = false; // Keep for backward compatibility temporarily
   public age: number = 0;
   public foodSourceId: string | null = null; // Track which food source this ant is carrying from
+  public carryingAmount: number = 0; // How much food currently carrying (0-carryCapacity)
+  public carryCapacity: number = 2; // Max food units per trip (1-3)
 
   private brain: AntBrain;
   private velocity: Vector2 = { x: 0, y: 0 };
@@ -18,7 +33,6 @@ export class Ant implements Entity {
   private colony: Vector2;
   private maxSpeed: number = 3;
   private pheromoneGrid: PheromoneGrid;
-  private pheromoneTimer: number = 0;
   private isDead: boolean = false;
   private stuckCounter: number = 0;
   private lastPosition: Vector2 = { x: 0, y: 0 };
@@ -26,6 +40,16 @@ export class Ant implements Entity {
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
   private followingTrail: boolean = false; // Track if currently following a pheromone trail
+
+  // Memory fields (redesign task 4)
+  private lastHeading: number = 0; // Current heading in radians
+  private lastFoodPosition: Vector2 | null = null; // Position of last found food
+  private timeSinceLastFood: number = 0; // Time elapsed since last food pickup
+
+  // Trail deposit tracking (tasks 10-11)
+  private stepsSinceLastFoodPherDeposit: number = 0;
+  private stepsSinceLastHomePherDeposit: number = 0;
+  private distanceTraveled: number = 0;
 
   constructor(
     position: Vector2,
@@ -43,6 +67,9 @@ export class Ant implements Entity {
 
     // Create genome
     this.genome = GenomeFactory.createGenome(AntRole.WORKER, parentBrain);
+
+    // Set carry capacity with some variation (1-3 units)
+    this.carryCapacity = 1 + Math.floor(Math.random() * 3); // 1, 2, or 3
 
     // Create brain - either from parent or new random
     const config = GenomeFactory.createWorkerConfig();
@@ -68,13 +95,14 @@ export class Ant implements Entity {
     const randomAngle = Math.random() * Math.PI * 2;
     this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
     this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
+    this.lastHeading = randomAngle;
   }
 
   private renderAnt(): void {
     this.graphics.clear();
 
     const size = this.genome.role === AntRole.QUEEN ? 8 : 5;
-    const color = this.hasFood ? 0xffff00 : 0xff6644; // Yellow if carrying food, orange-red otherwise
+    const color = this.state === AntState.RETURNING ? 0xffff00 : 0xff6644; // Yellow if returning with food, orange-red if foraging
 
     // Ant body (main circle)
     this.graphics.circle(0, 0, size);
@@ -85,7 +113,7 @@ export class Ant implements Entity {
     this.graphics.fill({ color: 0x000000, alpha: 0.3 });
 
     // If carrying food, draw a small yellow dot
-    if (this.hasFood) {
+    if (this.state === AntState.RETURNING) {
       this.graphics.circle(0, 0, size * 0.4);
       this.graphics.fill(0xffdd00);
     }
@@ -109,9 +137,12 @@ export class Ant implements Entity {
 
     this.age += deltaTime;
 
-    // Very slow energy consumption (and cap deltaTime to prevent huge drains)
+    // Update memory: time since last food
+    this.timeSinceLastFood += deltaTime;
+
+    // Energy consumption (and cap deltaTime to prevent huge drains)
     const cappedDelta = Math.min(deltaTime, 2);
-    this.energy -= 0.001 * cappedDelta;
+    this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta;
 
     if (this.energy <= 0) {
       this.isDead = true;
@@ -160,8 +191,8 @@ export class Ant implements Entity {
           const awayX = awayFromEdgeX / dist;
           const awayY = awayFromEdgeY / dist;
 
-          // If carrying food, blend away direction with colony direction
-          if (this.hasFood) {
+          // If returning with food, blend away direction with colony direction
+          if (this.state === AntState.RETURNING) {
             const toColony = {
               x: this.colony.x - this.position.x,
               y: this.colony.y - this.position.y,
@@ -311,30 +342,360 @@ export class Ant implements Entity {
     this.sprite.x = this.position.x;
     this.sprite.y = this.position.y;
 
-    // Drop pheromones - FREQUENTLY when carrying food back
-    this.pheromoneTimer += deltaTime;
-    if (this.pheromoneTimer > 0.5) { // Drop every 0.5 frames instead of 2 - much denser trail!
-      this.pheromoneTimer = 0;
-      // Drop trail when carrying food and actually moving
-      const isMoving = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y) > 0.5;
-      if (this.hasFood && isMoving && this.foodSourceId) {
-        // Drop pheromone, but it will be rejected if the grid cell overlaps with an obstacle
-        this.pheromoneGrid.depositPheromone(
-          this.position.x,
-          this.position.y,
-          'foodTrail',
-          5,
-          this.foodSourceId,
-          obstacleManager
-        );
-      }
+    // Update last heading based on current velocity
+    if (Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y) > 0.1) {
+      this.lastHeading = Math.atan2(this.velocity.y, this.velocity.x);
     }
+
+    // Phase 2: Pheromone deposit now handled via trail decay gates in behavior methods (Tasks 10-11)
+    // Old time-based deposit code removed
 
     // Only re-render every 10 frames to save performance
     if (Math.floor(this.age) % 10 === 0 || this.age < 2) {
       this.renderAnt();
     }
   }
+
+  // ============================================================
+  // PHASE 2 REDESIGN: New behavior architecture
+  // ============================================================
+
+  /** Cast a single ray for FOV sensing (Task 6) */
+  private castRay(angle: number, distance: number, foodSources?: any[], obstacleManager?: any): RayResult {
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    const endX = this.position.x + dirX * distance;
+    const endY = this.position.y + dirY * distance;
+
+    const result: RayResult = {
+      angle,
+      hitObstacle: false,
+      obstacleDistance: distance,
+      foodPher: 0,
+      homePher: 0,
+      foodVisible: false,
+      foodDistance: distance,
+    };
+
+    // Check for obstacle collision along ray
+    if (obstacleManager) {
+      const collision = obstacleManager.checkCollision({ x: endX, y: endY }, 5);
+      if (collision) {
+        result.hitObstacle = true;
+        const dx = endX - this.position.x;
+        const dy = endY - this.position.y;
+        result.obstacleDistance = Math.sqrt(dx * dx + dy * dy) * 0.8; // Slightly shorter to be safe
+      }
+    }
+
+    // Sample pheromone levels at ray endpoint
+    result.foodPher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'foodPher');
+    result.homePher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'homePher');
+
+    // Check for food visibility along ray
+    if (foodSources) {
+      for (const food of foodSources) {
+        if (food.isEmpty && food.isEmpty()) continue;
+
+        const toFoodX = food.position.x - this.position.x;
+        const toFoodY = food.position.y - this.position.y;
+        const foodDist = Math.sqrt(toFoodX * toFoodX + toFoodY * toFoodY);
+
+        // Check if food is roughly along this ray direction
+        const foodAngle = Math.atan2(toFoodY, toFoodX);
+        const angleDiff = Math.abs(foodAngle - angle);
+
+        if (angleDiff < 0.3 && foodDist < distance) { // Within ~17 degrees
+          result.foodVisible = true;
+          result.foodDistance = foodDist;
+          break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /** Sense environment using FOV rays (Task 6) */
+  private senseEnvironment(foodSources?: any[], obstacleManager?: any): RayResult[] {
+    const rayCount = 5; // CONFIG.FOV_RAY_COUNT
+    const fovAngle = Math.PI / 3; // CONFIG.FOV_ANGLE (60 degrees)
+    const rayDistance = 80; // CONFIG.FOV_DISTANCE
+
+    const rays: RayResult[] = [];
+    const currentHeading = this.lastHeading;
+
+    // Cast rays in a cone around current heading
+    for (let i = 0; i < rayCount; i++) {
+      const angleOffset = ((i / (rayCount - 1)) - 0.5) * fovAngle; // -30° to +30°
+      const rayAngle = currentHeading + angleOffset;
+      rays.push(this.castRay(rayAngle, rayDistance, foodSources, obstacleManager));
+    }
+
+    return rays;
+  }
+
+  /** Softmax selection over candidate directions (Task 7) */
+  private selectDirectionSoftmax(candidates: { angle: number; score: number }[]): number {
+    if (candidates.length === 0) return this.lastHeading;
+
+    // Apply softmax with temperature (higher = more random)
+    const temperature = 1.0; // Increased for more exploration
+    let maxScore = -Infinity;
+    for (const c of candidates) {
+      if (c.score > maxScore) maxScore = c.score;
+    }
+
+    // Normalize scores and compute exp
+    const expScores: number[] = [];
+    let sumExp = 0;
+    for (const c of candidates) {
+      const exp = Math.exp((c.score - maxScore) / temperature);
+      expScores.push(exp);
+      sumExp += exp;
+    }
+
+    // Sample from softmax distribution
+    const rand = Math.random() * sumExp;
+    let cumulative = 0;
+    for (let i = 0; i < candidates.length; i++) {
+      cumulative += expScores[i];
+      if (rand <= cumulative) {
+        return candidates[i].angle;
+      }
+    }
+
+    return candidates[candidates.length - 1].angle;
+  }
+
+  /** Get obstacle repulsion vector (Task 12) */
+  private getObstacleRepulsion(obstacleManager?: any): Vector2 {
+    if (!obstacleManager) return { x: 0, y: 0 };
+
+    // Check nearby for obstacles
+    const checkDistance = 40;
+    const angles = [0, Math.PI / 4, Math.PI / 2, -Math.PI / 4, -Math.PI / 2];
+
+    let repulsionX = 0;
+    let repulsionY = 0;
+
+    for (const offset of angles) {
+      const angle = this.lastHeading + offset;
+      const checkX = this.position.x + Math.cos(angle) * checkDistance;
+      const checkY = this.position.y + Math.sin(angle) * checkDistance;
+
+      const collision = obstacleManager.checkCollision({ x: checkX, y: checkY }, 5);
+      if (collision) {
+        // Add repulsion away from this direction
+        const weight = 1.0 / (checkDistance + 1);
+        repulsionX -= Math.cos(angle) * weight;
+        repulsionY -= Math.sin(angle) * weight;
+      }
+    }
+
+    return { x: repulsionX, y: repulsionY };
+  }
+
+  /** FORAGING behavior (Task 8) */
+  private updateForagingBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // PRIORITY 1: Direct food sensing (wider range, simpler)
+    let nearestFood: { position: Vector2; distance: number } | null = null;
+    let nearestDist = 200; // Wider detection range
+
+    if (foodSources) {
+      for (const food of foodSources) {
+        if (food.isEmpty && food.isEmpty()) continue;
+
+        const dx = food.position.x - this.position.x;
+        const dy = food.position.y - this.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestFood = { position: food.position, distance: dist };
+        }
+      }
+    }
+
+    // If food is nearby, head straight to it (override everything else)
+    if (nearestFood) {
+      const dx = nearestFood.position.x - this.position.x;
+      const dy = nearestFood.position.y - this.position.y;
+      const dist = nearestFood.distance;
+
+      this.velocity.x = (dx / dist) * this.maxSpeed;
+      this.velocity.y = (dy / dist) * this.maxSpeed;
+      return; // Done - heading to food
+    }
+
+    // PRIORITY 2: Follow pheromone trails (if they exist)
+    const currentPher = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher');
+
+    if (currentPher > 0.5) {
+      // On a trail - sample directions to follow it AWAY from colony
+      const toColonyDist = Math.sqrt(
+        (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+      );
+
+      let bestDir: Vector2 | null = null;
+      let bestScore = -Infinity;
+
+      // Sample 8 directions
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        const checkDist = 30;
+        const checkX = this.position.x + Math.cos(angle) * checkDist;
+        const checkY = this.position.y + Math.sin(angle) * checkDist;
+
+        const pherLevel = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodPher');
+        const distToColony = Math.sqrt((checkX - this.colony.x) ** 2 + (checkY - this.colony.y) ** 2);
+
+        // Score: high pheromone + moving away from colony
+        if (pherLevel > 0.1 && distToColony > toColonyDist) {
+          const score = pherLevel;
+          if (score > bestScore) {
+            bestScore = score;
+            bestDir = { x: Math.cos(angle), y: Math.sin(angle) };
+          }
+        }
+      }
+
+      if (bestDir) {
+        this.velocity.x = bestDir.x * this.maxSpeed;
+        this.velocity.y = bestDir.y * this.maxSpeed;
+        return; // Following trail
+      }
+    }
+
+    // PRIORITY 3: Explore (no food, no trail)
+    // Add occasional random turns to prevent edge hugging
+    if (Math.random() < 0.02) { // 2% chance per frame to make a big turn
+      const randomAngle = Math.random() * Math.PI * 2;
+      this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
+      this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
+      return;
+    }
+
+    const toColonyDist = Math.sqrt(
+      (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+    );
+    const rays = this.senseEnvironment(foodSources, obstacleManager);
+    const candidates: { angle: number; score: number }[] = [];
+
+    for (const ray of rays) {
+      let score = 0;
+
+      // Prefer clear paths
+      if (!ray.hitObstacle) {
+        score += 1.0;
+      } else {
+        score -= 3.0; // Strong penalty
+      }
+
+      // Prefer directions away from colony (exploration bias)
+      const rayEndX = this.position.x + Math.cos(ray.angle) * ray.obstacleDistance;
+      const rayEndY = this.position.y + Math.sin(ray.angle) * ray.obstacleDistance;
+      const rayEndColonyDist = Math.sqrt(
+        (rayEndX - this.colony.x) ** 2 + (rayEndY - this.colony.y) ** 2
+      );
+
+      if (rayEndColonyDist > toColonyDist) {
+        score += 0.3; // Small bonus for moving away
+      }
+
+      // Very large random component for exploration to prevent edge hugging
+      score += (Math.random() - 0.5) * 4.0;
+
+      candidates.push({ angle: ray.angle, score });
+    }
+
+    // Select with more randomness (higher temperature)
+    const chosenAngle = this.selectDirectionSoftmax(candidates);
+    this.velocity.x = Math.cos(chosenAngle) * this.maxSpeed;
+    this.velocity.y = Math.sin(chosenAngle) * this.maxSpeed;
+
+    // Trail reinforcement: deposit weak homePher every N steps (Task 11)
+    this.stepsSinceLastHomePherDeposit++;
+    if (this.stepsSinceLastHomePherDeposit >= 8 && obstacleManager) {
+      this.pheromoneGrid.depositPheromone(
+        this.position.x,
+        this.position.y,
+        'homePher',
+        1,
+        undefined,
+        obstacleManager
+      );
+      this.stepsSinceLastHomePherDeposit = 0;
+    }
+  }
+
+  /** RETURNING behavior (Task 9) */
+  private updateReturningBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // Deposit foodPher with trail decay gates (Task 10)
+    this.stepsSinceLastFoodPherDeposit++;
+    if (this.stepsSinceLastFoodPherDeposit >= 4 && this.foodSourceId && obstacleManager) { // FOOD_PHER_DEPOSIT_INTERVAL
+      this.pheromoneGrid.depositPheromone(
+        this.position.x,
+        this.position.y,
+        'foodPher',
+        5, // PHEROMONE_STRENGTH
+        this.foodSourceId,
+        obstacleManager
+      );
+      this.stepsSinceLastFoodPherDeposit = 0;
+    }
+
+    // Follow home vector (breadcrumb / homePher gradient)
+    const homePherGradient = this.pheromoneGrid.getPheromoneGradient(
+      this.position.x,
+      this.position.y,
+      'homePher'
+    );
+
+    const toColony = {
+      x: this.colony.x - this.position.x,
+      y: this.colony.y - this.position.y,
+    };
+    const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
+    const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 1, y: 0 };
+
+    // Blend: 70% home vector, 30% homePher gradient
+    const gradMag = Math.sqrt(homePherGradient.x ** 2 + homePherGradient.y ** 2);
+    let dirX = colonyDir.x * 0.7;
+    let dirY = colonyDir.y * 0.7;
+
+    if (gradMag > 0.01) {
+      dirX += (homePherGradient.x / gradMag) * 0.3;
+      dirY += (homePherGradient.y / gradMag) * 0.3;
+    }
+
+    // Normalize
+    const mag = Math.sqrt(dirX * dirX + dirY * dirY);
+    if (mag > 0) {
+      dirX /= mag;
+      dirY /= mag;
+    }
+
+    // Apply obstacle repulsion (Task 12)
+    const repulsion = this.getObstacleRepulsion(obstacleManager);
+    dirX += repulsion.x * 0.2;
+    dirY += repulsion.y * 0.2;
+
+    // Normalize again
+    const finalMag = Math.sqrt(dirX * dirX + dirY * dirY);
+    if (finalMag > 0) {
+      this.velocity.x = (dirX / finalMag) * this.maxSpeed;
+      this.velocity.y = (dirY / finalMag) * this.maxSpeed;
+    } else {
+      // Fallback: just head to colony
+      this.velocity.x = colonyDir.x * this.maxSpeed;
+      this.velocity.y = colonyDir.y * this.maxSpeed;
+    }
+  }
+
+  // ============================================================
+  // END PHASE 2 REDESIGN
+  // ============================================================
 
   private gatherInputs(foodSources?: any[]): number[] {
     // Calculate direction to colony
@@ -348,9 +709,9 @@ export class Ant implements Entity {
       y: colonyDist > 0 ? toColony.y / colonyDist : 0,
     };
 
-    // Find nearest food (if not carrying food)
+    // Find nearest food (if foraging)
     let foodDirNorm = { x: 0, y: 0 };
-    if (!this.hasFood && foodSources && foodSources.length > 0) {
+    if (this.state === AntState.FORAGING && foodSources && foodSources.length > 0) {
       let nearestDist = Infinity;
       let nearestFood = null;
 
@@ -372,7 +733,7 @@ export class Ant implements Entity {
     }
 
     // Get pheromone gradient
-    const pheromoneType = this.hasFood ? 'exploration' : 'foodTrail';
+    const pheromoneType = this.state === AntState.RETURNING ? 'homePher' : 'foodPher';
     const pheromoneGrad = this.pheromoneGrid.getPheromoneGradient(
       this.position.x,
       this.position.y,
@@ -392,19 +753,30 @@ export class Ant implements Entity {
       colonyDirNorm.y,
       pheromoneGrad.x * 5, // Amplify pheromone gradient influence
       pheromoneGrad.y * 5,
-      this.hasFood ? 1 : 0,
+      this.state === AntState.RETURNING ? 1 : 0,
       this.energy / 200, // Normalize to 0-1
     ];
   }
 
   private processOutputs(outputs: number[], deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // SIMPLE RULE 1: Carrying food? Follow existing trail home OR navigate if no trail.
-    if (this.hasFood) {
-      // Use pheromone gradient for this specific food source
+    // Clean Phase 2 dispatch: simple state-based routing
+    if (this.state === AntState.RETURNING) {
+      this.updateReturningBehavior(deltaTime, foodSources, obstacleManager);
+    } else {
+      this.updateForagingBehavior(deltaTime, foodSources, obstacleManager);
+    }
+  }
+
+  // Legacy code below (will be removed after testing)
+  /*
+  private processOutputsOLD(outputs: number[], deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // OLD IMPLEMENTATION - REPLACED BY PHASE 2 REDESIGN
+    if (this.state === AntState.RETURNING) {
+      // Use home pheromone gradient to navigate back
       const gradient = this.pheromoneGrid.getPheromoneGradient(
         this.position.x,
         this.position.y,
-        'foodTrail',
+        'homePher',
         this.foodSourceId || undefined
       );
 
@@ -421,7 +793,7 @@ export class Ant implements Entity {
       const gradMag = Math.sqrt(gradient.x * gradient.x + gradient.y * gradient.y);
 
       // Check current pheromone level - if ANY trail exists, follow it
-      const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodTrail');
+      const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'homePher');
 
       // If there's ANY trail (even weak) that leads toward colony, follow it
       if (currentLevel > 1.0 && gradMag > 0.05 && alignment > 0.2) {
@@ -488,9 +860,9 @@ export class Ant implements Entity {
       return;
     }
 
-    // SIMPLE RULE 2: Smell "food trail" pheromones? Follow them AWAY from colony.
+    // SIMPLE RULE 2: Smell food pheromones? Follow them AWAY from colony.
     // Check pheromone level at current position
-    const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodTrail');
+    const currentLevel = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher');
 
     if (currentLevel > 0.2) {
       // On a trail! Sample 8 directions to find where it leads
@@ -508,7 +880,7 @@ export class Ant implements Entity {
         const checkX = this.position.x + dirX * cellSize;
         const checkY = this.position.y + dirY * cellSize;
 
-        const level = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodTrail');
+        const level = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodPher');
 
         // Check if this direction leads away from colony
         const distToColonyFromCheck = Math.sqrt(
@@ -577,17 +949,32 @@ export class Ant implements Entity {
       this.velocity.y = (this.velocity.y / velMag) * targetSpeed;
     }
   }
+  */
+  // END LEGACY CODE
 
-  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string): boolean {
-    if (this.hasFood) return false;
+  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string, amountAvailable: number = 1): number {
+    if (this.state === AntState.RETURNING) return 0; // Already carrying food
 
     const dx = this.position.x - foodPosition.x;
     const dy = this.position.y - foodPosition.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist < pickupRadius) {
-      this.hasFood = true;
+    if (dist < pickupRadius && amountAvailable > 0) {
+      // Take a chunk: min(available, carry capacity)
+      const amountToTake = Math.min(amountAvailable, this.carryCapacity);
+      this.carryingAmount = amountToTake;
+
+      // State transition: Foraging -> Returning
+      this.state = AntState.RETURNING;
+      this.hasFood = true; // Keep for backward compatibility
       this.foodSourceId = foodSourceId || null; // Remember which food source this came from
+
+      // Update memory: remember this food location and reset timer
+      this.lastFoodPosition = { x: foodPosition.x, y: foodPosition.y };
+      this.timeSinceLastFood = 0;
+
+      // Restore small amount of energy when finding food (Phase 3 Task 14)
+      this.energy = Math.min(200, this.energy + 10);
 
       // IMMEDIATELY move away from food source to prevent getting stuck
       // First, push away from food
@@ -612,22 +999,27 @@ export class Ant implements Entity {
       // Reset stuck counters
       this.stuckCounter = 0;
 
-      return true;
+      return amountToTake; // Return amount taken
     }
-    return false;
+    return 0; // No food taken
   }
 
-  public checkColonyReturn(returnRadius: number = 50): boolean {
-    if (!this.hasFood) return false;
+  public checkColonyReturn(returnRadius: number = 50): number {
+    if (this.state !== AntState.RETURNING) return 0; // Not carrying food
 
     const dx = this.position.x - this.colony.x;
     const dy = this.position.y - this.colony.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist < returnRadius) {
-      this.hasFood = false;
+      const deliveredAmount = this.carryingAmount;
+
+      // State transition: Returning -> Foraging (drop food)
+      this.state = AntState.FORAGING;
+      this.hasFood = false; // Keep for backward compatibility
+      this.carryingAmount = 0; // Drop all food
       this.foodSourceId = null; // Clear food source ID
-      this.energy = Math.min(200, this.energy + 40); // Restore some energy
+      this.energy = Math.min(200, this.energy + 30); // Restore some energy
 
       // Push ant away from colony slightly to prevent clustering
       if (dist > 0) {
@@ -644,9 +1036,9 @@ export class Ant implements Entity {
         this.stuckCounter = 0; // Reset stuck counter
       }
 
-      return true; // Food delivered
+      return deliveredAmount; // Return amount delivered
     }
-    return false;
+    return 0; // No food delivered
   }
 
   public isAlive(): boolean {

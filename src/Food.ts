@@ -80,12 +80,14 @@ export class FoodManager {
   private worldWidth: number;
   private worldHeight: number;
   private obstacleManager: any = null;
+  private pheromoneGrid: any = null; // Phase 3 Task 15: Trail avoidance for food spawning
 
-  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any) {
+  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any, pheromoneGrid?: any) {
     this.container = container;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.obstacleManager = obstacleManager;
+    this.pheromoneGrid = pheromoneGrid;
 
     // Spawn initial food sources
     this.spawnInitialFood(CONFIG.INITIAL_FOOD_SOURCES);
@@ -98,11 +100,12 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // Random position, avoiding center (colony area), edges, and obstacles
+    // Random position, avoiding center (colony area), edges, obstacles, and high pheromone trails
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
     const minDistFromCenter = 200;
     const margin = 50; // Keep food away from edges so ants can reach it
+    const maxFoodPherThreshold = 5.0; // Phase 3 Task 15: Avoid high foodPher areas
 
     let position: Vector2;
     let attempts = 0;
@@ -120,7 +123,14 @@ export class FoodManager {
       // Check if position is valid (not in obstacle and far from center)
       const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, 30);
 
-      if (distFromCenter >= minDistFromCenter && !inObstacle) {
+      // Phase 3 Task 15: Check foodPher level at this position
+      let highPheromone = false;
+      if (this.pheromoneGrid) {
+        const foodPher = this.pheromoneGrid.getPheromoneLevel(position.x, position.y, 'foodPher');
+        highPheromone = foodPher > maxFoodPherThreshold;
+      }
+
+      if (distFromCenter >= minDistFromCenter && !inObstacle && !highPheromone) {
         break;
       }
 

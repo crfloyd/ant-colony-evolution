@@ -30,7 +30,7 @@ export const OBSTACLE_COLONY_CLEARANCE = 500;
 // Ant Settings
 export const ANT_MAX_SPEED = 3;
 export const ANT_STARTING_ENERGY = 200;
-export const ANT_ENERGY_DRAIN = 0.001;
+export const ANT_ENERGY_DRAIN = 0.03; // Ants starve in ~2 minutes without food
 export const ANT_VISION_RANGE = 300; // How far ants can see food
 export const ANT_FOOD_PICKUP_RADIUS = 35;
 export const ANT_COLONY_RETURN_RADIUS = 50;
@@ -41,6 +41,21 @@ export const PHEROMONE_DECAY_RATE = 0.998;
 export const PHEROMONE_DROP_INTERVAL = 2; // frames
 export const PHEROMONE_STRENGTH = 5;
 export const PHEROMONE_FOLLOW_THRESHOLD = 2.0;
+
+// Behavior Settings (Phase 2 redesign)
+export const FOV_RAY_COUNT = 5; // Number of rays to cast (3-5)
+export const FOV_ANGLE = Math.PI / 3; // 60 degrees total FOV
+export const FOV_DISTANCE = 80; // How far rays extend
+
+// Trail deposit settings
+export const FOOD_PHER_DEPOSIT_INTERVAL = 4; // Deposit foodPher every N steps
+export const HOME_PHER_DEPOSIT_INTERVAL = 8; // Deposit weak homePher every N steps
+export const HOME_PHER_WEAK_STRENGTH = 1; // Weak homePher for trail reinforcement
+
+// Behavior weights for direction selection
+export const WEIGHT_PHEROMONE = 0.6;
+export const WEIGHT_RANDOM = 0.3;
+export const WEIGHT_OBSTACLE = 0.1;
 
 // Camera Settings
 export const CAMERA_START_ZOOM = 0.5;

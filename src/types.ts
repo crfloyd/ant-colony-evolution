@@ -10,6 +10,11 @@ export enum AntRole {
   QUEEN = 'QUEEN',
 }
 
+export enum AntState {
+  FORAGING = 'FORAGING',
+  RETURNING = 'RETURNING',
+}
+
 export interface NeuralNetworkConfig {
   inputs: number;
   hidden: number[];
