@@ -1,7 +1,8 @@
-import { Graphics, Container } from 'pixi.js';
+import { Graphics, Container, AnimatedSprite, Sprite } from 'pixi.js';
 import { Entity, Vector2, AntRole, AntState } from './types';
 import { PheromoneGrid } from './PheromoneGrid';
 import * as CONFIG from './config';
+import { antSpriteTextures } from './Game';
 
 /** Data structure for FOV ray results (Phase 2 Task 6) */
 interface RayResult {
@@ -32,7 +33,9 @@ export class Ant implements Entity {
   private levyDirection: number = 0; // Current direction for Lévy step
 
   private velocity: Vector2 = { x: 0, y: 0 };
-  private graphics: Graphics;
+  private graphics: Graphics | null = null;
+  private animatedSprite: AnimatedSprite | null = null;
+  private currentSpriteRotation: number = 0; // Smooth rotation tracking
   private colony: Vector2;
   private maxSpeed: number = 3;
   private pheromoneGrid: PheromoneGrid;
@@ -87,11 +90,31 @@ export class Ant implements Entity {
         Math.floor(Math.random() * (CONFIG.FORAGER_MAX_CARRY_CAPACITY - CONFIG.FORAGER_MIN_CARRY_CAPACITY + 1));
     }
 
-    // Create sprite
+    // Create sprite - use animated sprite if textures loaded, otherwise graphics fallback
     this.sprite = new Container();
-    this.graphics = new Graphics();
-    this.sprite.addChild(this.graphics);
-    this.renderAnt();
+
+    if (antSpriteTextures && antSpriteTextures.length > 0) {
+      // Use animated sprite
+      this.animatedSprite = new AnimatedSprite(antSpriteTextures);
+      this.animatedSprite.animationSpeed = 0.1; // Slow animation speed
+
+      // Randomize starting frame to desynchronize animations
+      this.animatedSprite.currentFrame = Math.floor(Math.random() * antSpriteTextures.length);
+
+      this.animatedSprite.play();
+      this.animatedSprite.anchor.set(0.5); // Center the sprite
+      this.animatedSprite.scale.set(0.3); // Scale down to match ant size
+
+      // Set z-index based on y position to reduce flickering when bunched up
+      this.sprite.zIndex = position.y;
+
+      this.sprite.addChild(this.animatedSprite);
+    } else {
+      // Fallback to graphics rendering
+      this.graphics = new Graphics();
+      this.sprite.addChild(this.graphics);
+      this.renderAnt();
+    }
 
     this.sprite.x = position.x;
     this.sprite.y = position.y;
@@ -103,14 +126,10 @@ export class Ant implements Entity {
     this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
     this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
     this.lastHeading = randomAngle;
+    this.currentSpriteRotation = randomAngle + Math.PI / 2; // Initialize sprite rotation
   }
 
   private renderAnt(): void {
-    this.graphics.clear();
-
-    // Size based on role
-    const size = CONFIG.ANT_SIZE;
-
     // Color based on role and state
     let color: number;
     if (this.state === AntState.RETURNING) {
@@ -121,31 +140,68 @@ export class Ant implements Entity {
       color = 0xff6644; // Orange-red for foragers
     }
 
-    // Ant body (main circle)
-    this.graphics.circle(0, 0, size);
-    this.graphics.fill(color);
+    if (this.animatedSprite) {
+      // Brighten the sprite with a light tint
+      // Use lighter colors to make ants more visible
+      let brightColor: number;
+      if (this.state === AntState.RETURNING) {
+        brightColor = 0xffffaa; // Light yellow when carrying food
+      } else if (this.role === AntRole.SCOUT) {
+        brightColor = 0xaaffff; // Light cyan for scouts
+      } else {
+        brightColor = 0xffccaa; // Light orange for foragers
+      }
+      this.animatedSprite.tint = brightColor;
 
-    // Add a darker center for depth
-    this.graphics.circle(0, 0, size * 0.6);
-    this.graphics.fill({ color: 0x000000, alpha: 0.3 });
+      // Smoothly rotate sprite to match velocity direction
+      // Add π/2 offset because sprite faces upward by default
+      const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+      if (speed > 0.1) {
+        const targetRotation = Math.atan2(this.velocity.y, this.velocity.x) + Math.PI / 2;
 
-    // If carrying food, draw a small yellow dot
-    if (this.state === AntState.RETURNING) {
-      this.graphics.circle(0, 0, size * 0.4);
-      this.graphics.fill(0xffdd00);
-    }
+        // Calculate shortest angular distance
+        let diff = targetRotation - this.currentSpriteRotation;
+        // Normalize to [-π, π]
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
 
-    // Indicate direction with a small line (only if moving significantly)
-    const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
-    if (speed > 0.5) {
-      // Normalize velocity for consistent line length
-      const lineLength = CONFIG.ANT_DIRECTION_INDICATOR_LENGTH;
-      const dirX = (this.velocity.x / speed) * lineLength;
-      const dirY = (this.velocity.y / speed) * lineLength;
+        // Lerp rotation smoothly (0.2 = 20% per frame)
+        this.currentSpriteRotation += diff * 0.2;
+        this.animatedSprite.rotation = this.currentSpriteRotation;
+      }
+    } else if (this.graphics) {
+      // Fallback graphics rendering
+      this.graphics.clear();
 
-      this.graphics.moveTo(0, 0);
-      this.graphics.lineTo(dirX, dirY);
-      this.graphics.stroke({ width: 2, color: 0xffffff, alpha: 0.6 });
+      // Size based on role
+      const size = CONFIG.ANT_SIZE;
+
+      // Ant body (main circle)
+      this.graphics.circle(0, 0, size);
+      this.graphics.fill(color);
+
+      // Add a darker center for depth
+      this.graphics.circle(0, 0, size * 0.6);
+      this.graphics.fill({ color: 0x000000, alpha: 0.3 });
+
+      // If carrying food, draw a small yellow dot
+      if (this.state === AntState.RETURNING) {
+        this.graphics.circle(0, 0, size * 0.4);
+        this.graphics.fill(0xffdd00);
+      }
+
+      // Indicate direction with a small line (only if moving significantly)
+      const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+      if (speed > 0.5) {
+        // Normalize velocity for consistent line length
+        const lineLength = CONFIG.ANT_DIRECTION_INDICATOR_LENGTH;
+        const dirX = (this.velocity.x / speed) * lineLength;
+        const dirY = (this.velocity.y / speed) * lineLength;
+
+        this.graphics.moveTo(0, 0);
+        this.graphics.lineTo(dirX, dirY);
+        this.graphics.stroke({ width: 2, color: 0xffffff, alpha: 0.6 });
+      }
     }
   }
 
@@ -365,9 +421,22 @@ export class Ant implements Entity {
     // Phase 2: Pheromone deposit now handled via trail decay gates in behavior methods (Tasks 10-11)
     // Old time-based deposit code removed
 
-    // Only re-render every 10 frames to save performance
-    if (Math.floor(this.age) % CONFIG.ANT_RENDER_INTERVAL === 0 || this.age < 2) {
+    // Update animated sprite if available
+    if (this.animatedSprite) {
+      // Adjust animation speed based on movement speed (much slower)
+      const currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+      this.animatedSprite.animationSpeed = (currentSpeed / this.maxSpeed) * 1.5; // Slow base speed
+
+      // Update z-index based on y position to prevent flickering when bunched
+      this.sprite.zIndex = this.position.y;
+
+      // Update tint and rotation continuously
       this.renderAnt();
+    } else {
+      // Only re-render graphics every 10 frames to save performance
+      if (Math.floor(this.age) % CONFIG.ANT_RENDER_INTERVAL === 0 || this.age < 2) {
+        this.renderAnt();
+      }
     }
   }
 
@@ -567,6 +636,7 @@ export class Ant implements Entity {
         if (vDotN < 0) {
           this.velocity.x -= vDotN * bestN.x;
           this.velocity.y -= vDotN * bestN.y;
+          // Don't snap rotation - let it lerp smoothly in renderAnt()
         }
 
         // Consume the time we actually advanced
@@ -1075,7 +1145,7 @@ export class Ant implements Entity {
         this.velocity.y = (dy / dist) * this.maxSpeed;
 
         // Set cooldown so ant keeps moving away before other behaviors interfere
-        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN; // 30 frames of free movement
+        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
         this.stuckCounter = 0; // Reset stuck counter
       }
 

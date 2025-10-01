@@ -1,4 +1,4 @@
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container, Graphics, Assets, Texture, Rectangle } from 'pixi.js';
 import { Camera } from './Camera';
 import { PheromoneGrid } from './PheromoneGrid';
 import { Colony } from './Colony';
@@ -6,6 +6,9 @@ import { FoodManager } from './Food';
 import { ObstacleManager } from './Obstacle';
 import { Metrics } from './Metrics';
 import * as CONFIG from './config';
+
+// Global ant sprite textures
+export let antSpriteTextures: Texture[] | null = null;
 
 export class Game {
   private app: Application;
@@ -69,15 +72,43 @@ export class Game {
       canvas,
       width: window.innerWidth,
       height: window.innerHeight,
-      backgroundColor: 0x0a0a0a,
+      backgroundColor: 0xf5f5dc, // Beige/off-white background
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     });
 
     console.log('PixiJS initialized');
 
-    // Create world container
+    // Load ant sprite sheet
+    console.log('Loading ant sprite sheet...');
+    try {
+      const spriteSheet = await Assets.load('/ant-sprint-sheet.png');
+
+      // Create textures from 8x8 grid (62 frames used, skip last 2 blank frames)
+      const frameWidth = spriteSheet.width / 8;
+      const frameHeight = spriteSheet.height / 8;
+      const textures: Texture[] = [];
+
+      let frameCount = 0;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          if (frameCount >= 62) break; // Skip last 2 blank frames
+          const rect = new Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight);
+          textures.push(new Texture({ source: spriteSheet.source, frame: rect }));
+          frameCount++;
+        }
+        if (frameCount >= 62) break;
+      }
+
+      antSpriteTextures = textures;
+      console.log(`Loaded ${textures.length} ant animation frames`);
+    } catch (err) {
+      console.error('Failed to load ant sprite sheet, using fallback graphics:', err);
+    }
+
+    // Create world container with sorting enabled to prevent flickering
     this.worldContainer = new Container();
+    this.worldContainer.sortableChildren = true; // Enable z-index sorting
     this.app.stage.addChild(this.worldContainer);
 
     // Initialize camera

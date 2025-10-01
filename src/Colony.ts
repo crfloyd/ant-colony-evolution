@@ -54,17 +54,59 @@ export class Colony implements Entity {
   private renderColony(): void {
     this.graphics.clear();
 
-    // Colony nest
-    this.graphics.circle(0, 0, CONFIG.COLONY_OUTER_RADIUS);
-    this.graphics.fill({ color: 0x8b4513, alpha: 0.9 }); // Brown
+    // Draw ant mound with gray/red soil appearance (distinct from brown food)
+    const outerRadius = CONFIG.COLONY_OUTER_RADIUS;
+    const midRadius = CONFIG.COLONY_MIDDLE_RADIUS;
+    const innerRadius = CONFIG.COLONY_ENTRANCE_RADIUS;
 
-    // Inner circle
-    this.graphics.circle(0, 0, CONFIG.COLONY_MIDDLE_RADIUS);
-    this.graphics.fill({ color: 0x654321, alpha: 0.9 });
+    // Base mound (irregular shape using multiple overlapping circles for texture)
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const offset = outerRadius * 0.15;
+      const x = Math.cos(angle) * offset;
+      const y = Math.sin(angle) * offset;
+      this.graphics.circle(x, y, outerRadius * 0.9);
+      this.graphics.fill({ color: 0xA0826D, alpha: 0.3 }); // Light grayish-brown
+    }
 
-    // Entrance
-    this.graphics.circle(0, 0, CONFIG.COLONY_ENTRANCE_RADIUS);
-    this.graphics.fill({ color: 0x000000, alpha: 0.8 });
+    // Main mound body - reddish clay/soil
+    this.graphics.circle(0, 0, outerRadius);
+    this.graphics.fill({ color: 0xC04000, alpha: 0.95 }); // Burnt orange/red clay
+
+    // Mid layer - darker red clay
+    this.graphics.circle(0, 0, midRadius);
+    this.graphics.fill({ color: 0xA03000, alpha: 0.9 }); // Dark red clay
+
+    // Add some texture spots (small dirt/pebble patches)
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.3;
+      const dist = midRadius * 0.5 + Math.random() * midRadius * 0.4;
+      const x = Math.cos(angle) * dist;
+      const y = Math.sin(angle) * dist;
+      const size = 3 + Math.random() * 4;
+      this.graphics.circle(x, y, size);
+      this.graphics.fill({ color: 0x8B7355, alpha: 0.7 }); // Grayish soil spots
+    }
+
+    // Entrance holes (multiple tunnels)
+    const entrances = [
+      { x: 0, y: 0, r: innerRadius },
+      { x: innerRadius * 0.8, y: innerRadius * 0.5, r: innerRadius * 0.6 },
+      { x: -innerRadius * 0.7, y: innerRadius * 0.6, r: innerRadius * 0.5 },
+    ];
+
+    for (const entrance of entrances) {
+      // Dark entrance with rim
+      this.graphics.circle(entrance.x, entrance.y, entrance.r * 1.2);
+      this.graphics.fill({ color: 0x602010, alpha: 0.9 }); // Dark reddish rim
+
+      this.graphics.circle(entrance.x, entrance.y, entrance.r);
+      this.graphics.fill({ color: 0x000000, alpha: 0.95 }); // Black hole
+    }
+
+    // Add highlight for 3D effect - lighter orange
+    this.graphics.circle(-outerRadius * 0.3, -outerRadius * 0.3, outerRadius * 0.3);
+    this.graphics.fill({ color: 0xFF6B35, alpha: 0.3 }); // Bright orange highlight
   }
 
   private spawnAnt(role?: AntRole): void {

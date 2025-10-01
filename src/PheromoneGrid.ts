@@ -1,4 +1,4 @@
-import { Graphics, Container } from 'pixi.js';
+import { Graphics, Container, BlurFilter } from 'pixi.js';
 import * as CONFIG from './config';
 
 interface PheromoneCell {
@@ -35,8 +35,16 @@ export class PheromoneGrid {
       }
     }
 
-    // Create graphics for rendering
+    // Create graphics for rendering with glow effect
     this.graphics = new Graphics();
+
+    // Add blur filter for glow effect
+    const blurFilter = new BlurFilter({
+      strength: 8,
+      quality: 4,
+    });
+    this.graphics.filters = [blurFilter];
+
     container.addChild(this.graphics);
   }
 
@@ -308,15 +316,17 @@ export class PheromoneGrid {
           const worldX = x * this.cellSize;
           const worldY = y * this.cellSize;
 
-          // Food pheromone is green (leads to food) - always show
+          // Food pheromone is green (leads to food) - with glow proportional to concentration
           const foodAlpha = Math.min(CONFIG.PHEROMONE_FOOD_ALPHA_MAX,
                                      cell.foodPher / CONFIG.PHEROMONE_FOOD_ALPHA_DIVISOR);
           if (foodAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
+            // Boost alpha for better visibility with glow
+            const boostedFoodAlpha = Math.min(0.6, foodAlpha * 2);
             this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
-            this.graphics.fill({ color: 0x00ff00, alpha: foodAlpha });
+            this.graphics.fill({ color: 0x00ff00, alpha: boostedFoodAlpha });
           }
 
-          // Home pheromone - filter by scout/forager
+          // Home pheromone - filter by scout/forager, with glow proportional to concentration
           const isScoutTrail = cell.homePher > scoutTrailThreshold;
           const shouldRenderHome = (isScoutTrail && showScoutTrails) || (!isScoutTrail && showForagerTrails);
 
@@ -324,8 +334,10 @@ export class PheromoneGrid {
             const homeAlpha = Math.min(CONFIG.PHEROMONE_HOME_ALPHA_MAX,
                                        cell.homePher / CONFIG.PHEROMONE_HOME_ALPHA_DIVISOR);
             if (homeAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
+              // Boost alpha for better visibility with glow
+              const boostedHomeAlpha = Math.min(0.5, homeAlpha * 2);
               this.graphics.rect(worldX, worldY, this.cellSize, this.cellSize);
-              this.graphics.fill({ color: 0x0066ff, alpha: homeAlpha });
+              this.graphics.fill({ color: 0x0066ff, alpha: boostedHomeAlpha });
             }
           }
         }
