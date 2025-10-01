@@ -19,13 +19,15 @@ export class Ant implements Entity {
   public position: Vector2;
   public sprite: Container;
   public genome: AntGenome;
+  public role: AntRole = AntRole.FORAGER; // Scout or Forager
   public energy: number = 200; // More starting energy so they live longer
   public state: AntState = AntState.FORAGING;
   public hasFood: boolean = false; // Keep for backward compatibility temporarily
   public age: number = 0;
   public foodSourceId: string | null = null; // Track which food source this ant is carrying from
   public carryingAmount: number = 0; // How much food currently carrying (0-carryCapacity)
-  public carryCapacity: number = 2; // Max food units per trip (1-3)
+  public carryCapacity: number = 1; // Max food units per trip (role-dependent)
+  public trailMisses: number = 0; // Count failed trail attempts → switch to Scout
 
   private brain: AntBrain;
   private velocity: Vector2 = { x: 0, y: 0 };
@@ -57,19 +59,27 @@ export class Ant implements Entity {
     pheromoneGrid: PheromoneGrid,
     parentBrain?: AntBrain,
     worldWidth: number = 8000,
-    worldHeight: number = 8000
+    worldHeight: number = 8000,
+    role: AntRole = AntRole.FORAGER
   ) {
     this.position = { ...position };
     this.colony = colony;
     this.pheromoneGrid = pheromoneGrid;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
+    this.role = role;
 
     // Create genome
-    this.genome = GenomeFactory.createGenome(AntRole.WORKER, parentBrain);
+    this.genome = GenomeFactory.createGenome(role, parentBrain);
 
-    // Set carry capacity with some variation (1-3 units)
-    this.carryCapacity = 1 + Math.floor(Math.random() * 3); // 1, 2, or 3
+    // Set carry capacity based on role
+    // Scouts: 1 unit (light and fast)
+    // Foragers: 1-2 units (harvest trails)
+    if (role === AntRole.SCOUT) {
+      this.carryCapacity = 1;
+    } else {
+      this.carryCapacity = 1 + Math.floor(Math.random() * 2); // 1 or 2
+    }
 
     // Create brain - either from parent or new random
     const config = GenomeFactory.createWorkerConfig();
@@ -101,8 +111,18 @@ export class Ant implements Entity {
   private renderAnt(): void {
     this.graphics.clear();
 
-    const size = this.genome.role === AntRole.QUEEN ? 8 : 5;
-    const color = this.state === AntState.RETURNING ? 0xffff00 : 0xff6644; // Yellow if returning with food, orange-red if foraging
+    // Size based on role
+    const size = 5;
+
+    // Color based on role and state
+    let color: number;
+    if (this.state === AntState.RETURNING) {
+      color = 0xffff00; // Yellow if carrying food
+    } else if (this.role === AntRole.SCOUT) {
+      color = 0x00ddff; // Cyan for scouts
+    } else {
+      color = 0xff6644; // Orange-red for foragers
+    }
 
     // Ant body (main circle)
     this.graphics.circle(0, 0, size);
@@ -629,6 +649,89 @@ export class Ant implements Entity {
     }
   }
 
+  /**
+   * Lévy walk step for scouts - power-law distributed step lengths
+   * Returns a step length following Lévy distribution with exponent μ
+   */
+  private levyStep(mu: number = 1.7): number {
+    // Inverse transform sampling: step_length = U^(-1/(μ-1))
+    // where U is uniform random [0, 1]
+    const u = Math.random();
+    const minStep = 10;
+    const maxStep = 150;
+    const rawStep = Math.pow(u, -1 / (mu - 1));
+    // Clamp to reasonable bounds
+    return Math.min(maxStep, Math.max(minStep, rawStep));
+  }
+
+  /** SCOUT behavior - Lévy walk exploration */
+  private updateScoutBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // PRIORITY 1: If scout sees food, pick it up and become forager temporarily
+    let nearestFood: { position: Vector2; distance: number } | null = null;
+    let nearestDist = 200;
+
+    if (foodSources) {
+      for (const food of foodSources) {
+        if (food.amount <= 0) continue;
+        const dx = food.position.x - this.position.x;
+        const dy = food.position.y - this.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestFood = { position: food.position, distance: dist };
+        }
+      }
+    }
+
+    if (nearestFood) {
+      // Head straight to food
+      const dx = nearestFood.position.x - this.position.x;
+      const dy = nearestFood.position.y - this.position.y;
+      const dist = nearestFood.distance;
+      this.velocity.x = (dx / dist) * this.maxSpeed;
+      this.velocity.y = (dy / dist) * this.maxSpeed;
+      return;
+    }
+
+    // PRIORITY 2: Lévy walk with obstacle avoidance
+    // Occasionally pick a new direction with Lévy-distributed step length
+    if (Math.random() < 0.05) { // 5% chance per frame to pick new direction
+      const randomAngle = Math.random() * Math.PI * 2;
+      this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
+      this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
+      this.lastHeading = randomAngle;
+    }
+
+    // Apply obstacle avoidance
+    const repulsion = this.getObstacleRepulsion(obstacleManager);
+    if (Math.abs(repulsion.x) > 0.1 || Math.abs(repulsion.y) > 0.1) {
+      this.velocity.x += repulsion.x * 0.5;
+      this.velocity.y += repulsion.y * 0.5;
+
+      // Normalize
+      const mag = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+      if (mag > 0) {
+        this.velocity.x = (this.velocity.x / mag) * this.maxSpeed;
+        this.velocity.y = (this.velocity.y / mag) * this.maxSpeed;
+      }
+    }
+
+    // Deposit weak homePher breadcrumbs (every 7 steps)
+    this.stepsSinceLastHomePherDeposit++;
+    if (this.stepsSinceLastHomePherDeposit >= 7 && obstacleManager) {
+      this.pheromoneGrid.depositPheromone(
+        this.position.x,
+        this.position.y,
+        'homePher',
+        0.5, // Weak breadcrumb
+        undefined,
+        obstacleManager
+      );
+      this.stepsSinceLastHomePherDeposit = 0;
+    }
+  }
+
   /** RETURNING behavior (Task 9) */
   private updateReturningBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // Deposit foodPher with trail decay gates (Task 10)
@@ -759,11 +862,16 @@ export class Ant implements Entity {
   }
 
   private processOutputs(outputs: number[], deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // Clean Phase 2 dispatch: simple state-based routing
+    // Dispatch based on role and state
     if (this.state === AntState.RETURNING) {
       this.updateReturningBehavior(deltaTime, foodSources, obstacleManager);
     } else {
-      this.updateForagingBehavior(deltaTime, foodSources, obstacleManager);
+      // FORAGING state - behavior depends on role
+      if (this.role === AntRole.SCOUT) {
+        this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+      } else {
+        this.updateForagingBehavior(deltaTime, foodSources, obstacleManager);
+      }
     }
   }
 

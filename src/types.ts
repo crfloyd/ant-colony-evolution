@@ -6,8 +6,8 @@ export interface Vector2 {
 }
 
 export enum AntRole {
-  WORKER = 'WORKER',
-  QUEEN = 'QUEEN',
+  SCOUT = 'SCOUT',
+  FORAGER = 'FORAGER',
 }
 
 export enum AntState {

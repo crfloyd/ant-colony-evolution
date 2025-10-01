@@ -1,5 +1,5 @@
 import { Graphics, Container } from 'pixi.js';
-import { Entity, Vector2 } from './types';
+import { Entity, Vector2, AntRole } from './types';
 import { Ant } from './Ant';
 import { PheromoneGrid } from './PheromoneGrid';
 import * as CONFIG from './config';
@@ -64,7 +64,7 @@ export class Colony implements Entity {
     this.graphics.fill({ color: 0x000000, alpha: 0.8 });
   }
 
-  private spawnAnt(parentBrain?: any): void {
+  private spawnAnt(parentBrain?: any, role?: AntRole): void {
     if (!this.worldContainer) {
       console.warn('Cannot spawn ant: worldContainer not set');
       return;
@@ -78,7 +78,10 @@ export class Colony implements Entity {
       y: this.position.y + Math.sin(angle) * distance,
     };
 
-    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, parentBrain, this.worldWidth, this.worldHeight);
+    // Determine role: if not specified, spawn 20% scouts, 80% foragers
+    const antRole = role || (Math.random() < 0.2 ? AntRole.SCOUT : AntRole.FORAGER);
+
+    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, parentBrain, this.worldWidth, this.worldHeight, antRole);
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
   }
