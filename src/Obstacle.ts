@@ -10,19 +10,38 @@ export class Obstacle implements Entity {
   public height: number;
   public radius: number; // Circular collision radius
   public sizeCategory: 'large' | 'medium' | 'small' = 'small'; // Rock size category
+  public collisionOffset: Vector2 = { x: 0, y: 0 }; // Offset for collision position from sprite position
 
   private rockSprite: Sprite | null = null;
   private graphics: Graphics | null = null;
   private debugGraphics: Graphics | null = null;
 
-  constructor(position: Vector2, width: number, height: number, rockTexture?: Texture, rotation: number = 0, sizeCategory?: 'large' | 'medium' | 'small') {
+  constructor(position: Vector2, width: number, height: number, rockTexture?: Texture, rotation: number = 0, sizeCategory?: 'large' | 'medium' | 'small', rockIndex?: number, row?: number, col?: number) {
     this.position = { ...position };
     this.width = width;
     this.height = height;
     this.sizeCategory = sizeCategory || 'small';
 
-    // Calculate circular collision radius (average of width/height / 2)
-    this.radius = (width + height) / 4;
+    // Calculate circular collision radius (average of width/height / 2, reduced by 5%)
+    let radiusMultiplier = 0.95;
+
+    // Large rocks need 10% additional reduction (15% total)
+    if (sizeCategory === 'large') {
+      radiusMultiplier = 0.85;
+    }
+
+    // Large rock at r3c4 (0-indexed: row=2, col=3) needs extra 10% reduction and 5px up shift
+    if (sizeCategory === 'large' && row === 2 && col === 3) {
+      radiusMultiplier = 0.75; // Extra 10% reduction (total 25% reduction)
+      this.collisionOffset = { x: 0, y: -5 }; // Shift collision up 5px
+    }
+
+    // Medium rocks columns 3-6 (array indices 2-4) need 20% smaller colliders
+    if (sizeCategory === 'medium' && rockIndex !== undefined && rockIndex >= 2 && rockIndex <= 4) {
+      radiusMultiplier = 0.8; // 20% smaller
+    }
+
+    this.radius = ((width + height) / 4) * radiusMultiplier;
 
     // Create sprite
     this.sprite = new Container();
@@ -100,22 +119,26 @@ export class Obstacle implements Entity {
   }
 
   public containsPoint(x: number, y: number): boolean {
-    // Circular collision
-    const dx = x - this.position.x;
-    const dy = y - this.position.y;
+    // Circular collision - use collision offset
+    const collisionX = this.position.x + this.collisionOffset.x;
+    const collisionY = this.position.y + this.collisionOffset.y;
+    const dx = x - collisionX;
+    const dy = y - collisionY;
     const distSq = dx * dx + dy * dy;
     return distSq < this.radius * this.radius;
   }
 
   public getClosestPointOnEdge(x: number, y: number): Vector2 {
-    // Circular collision - get closest point on circle edge
-    const dx = x - this.position.x;
-    const dy = y - this.position.y;
+    // Circular collision - get closest point on circle edge using collision offset
+    const collisionX = this.position.x + this.collisionOffset.x;
+    const collisionY = this.position.y + this.collisionOffset.y;
+    const dx = x - collisionX;
+    const dy = y - collisionY;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist === 0) {
       // Point is at center, return arbitrary edge point
-      return { x: this.position.x + this.radius, y: this.position.y };
+      return { x: collisionX + this.radius, y: collisionY };
     }
 
     // Normalize and scale to radius
@@ -123,8 +146,8 @@ export class Obstacle implements Entity {
     const ny = dy / dist;
 
     return {
-      x: this.position.x + nx * this.radius,
-      y: this.position.y + ny * this.radius,
+      x: collisionX + nx * this.radius,
+      y: collisionY + ny * this.radius,
     };
   }
 
@@ -190,6 +213,20 @@ export class ObstacleManager {
     const usedMedium: Set<number> = new Set();
     const usedSmall: Set<number> = new Set();
 
+    // Create row/col map for large rocks (3 rows x 4 cols, with some skipped)
+    // Based on loading order in Game.ts
+    const largeRockRowColMap = new Map<number, { row: number; col: number }>();
+    let largeIndex = 0;
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        // Skip row 1 col 3 and row 0 col 2 (as done in Game.ts loading)
+        if ((row === 1 && col === 3) || (row === 0 && col === 2)) {
+          continue;
+        }
+        largeRockRowColMap.set(largeIndex++, { row, col });
+      }
+    }
+
     const spawnRockCategory = (
       count: number,
       spriteArray: Texture[],
@@ -198,7 +235,8 @@ export class ObstacleManager {
       sizeVariation: number,
       isLarge: boolean = false,
       stdDevMultiplier: number = 1.0,
-      sizeCategory: 'large' | 'medium' | 'small' = 'small'
+      sizeCategory: 'large' | 'medium' | 'small' = 'small',
+      rowColMap?: Map<number, { row: number; col: number }> // Map sprite index to row/col
     ) => {
       for (let i = 0; i < count; i++) {
         let attempts = 0;
@@ -206,13 +244,13 @@ export class ObstacleManager {
         let size: number;
         let rockTexture: Texture;
         let rotation: number;
+        let rockIndex: number;
 
         // 15% chance to be an "outlier" rock (uniform random placement)
         const isOutlier = Math.random() < 0.15;
 
         do {
           // Pick a sprite (cycle through all, prefer unused)
-          let rockIndex: number;
           if (usedSet.size < spriteArray.length) {
             // Pick an unused sprite
             do {
@@ -311,15 +349,18 @@ export class ObstacleManager {
           continue; // Skip this rock
         }
 
+        // Get row/col if available
+        const rowCol = rowColMap?.get(rockIndex);
+
         // Create obstacle with rock sprite and rotation
-        const obstacle = new Obstacle(position, size, size, rockTexture, rotation, sizeCategory);
+        const obstacle = new Obstacle(position, size, size, rockTexture, rotation, sizeCategory, rockIndex, rowCol?.row, rowCol?.col);
         this.obstacles.push(obstacle);
         this.container.addChild(obstacle.sprite);
       }
     };
 
     // Spawn in order: large, medium, small with varying distributions
-    spawnRockCategory(largeCount, rockSpritesLarge, usedLarge, 350, 100, true, largeSpread, 'large');
+    spawnRockCategory(largeCount, rockSpritesLarge, usedLarge, 350, 100, true, largeSpread, 'large', largeRockRowColMap);
     spawnRockCategory(mediumCount, rockSpritesMedium, usedMedium, 200, 60, false, mediumSpread, 'medium');
     spawnRockCategory(smallCount, rockSpritesSmall, usedSmall, 120, 40, false, smallSpread, 'small');
   }
@@ -327,8 +368,11 @@ export class ObstacleManager {
   public checkCollision(position: Vector2, radius: number = CONFIG.OBSTACLE_DEFAULT_COLLISION_RADIUS): Obstacle | null {
     for (const obstacle of this.obstacles) {
       // Check if circle (ant) intersects with circle (obstacle)
-      const dx = position.x - obstacle.position.x;
-      const dy = position.y - obstacle.position.y;
+      // Use collision offset for accurate collision position
+      const collisionX = obstacle.position.x + obstacle.collisionOffset.x;
+      const collisionY = obstacle.position.y + obstacle.collisionOffset.y;
+      const dx = position.x - collisionX;
+      const dy = position.y - collisionY;
       const distSq = dx * dx + dy * dy;
       const minDist = radius + obstacle.radius;
 

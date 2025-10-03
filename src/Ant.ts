@@ -27,6 +27,8 @@ export class Ant implements Entity {
   public carryingAmount: number = 0; // How much food currently carrying (0-carryCapacity)
   public carryCapacity: number = 1; // Max food units per trip (role-dependent)
   public trailMisses: number = 0; // Count failed trail attempts → switch to Scout
+  public id: string = Math.random().toString(36).substr(2, 9); // Unique ID for debugging
+  public static selectedAntId: string | null = null; // Static field for selected ant
 
   // Lévy walk state for scouts
   private levyStepRemaining: number = 0; // Distance left to travel in current Lévy step
@@ -43,21 +45,27 @@ export class Ant implements Entity {
   private isDead: boolean = false;
     private wallFollowUntil: number = 0;
   private lastCollisionN: Vector2 | null = null;
-private stuckCounter: number = 0;
+public stuckCounter: number = 0;
   private lastPosition: Vector2 = { x: 0, y: 0 };
+  public lastDistMoved: number = 0; // For debugging - distance moved last frame
+  private lastDistToColony: number = 0; // Track progress toward colony
+  public unstuckRecoveryCooldown: number = 0; // Prevent counter reset immediately after unstuck
+  public ignorePheromoneTimer: number = 0; // Ignore pheromones during recovery
   private justReturnedTimer: number = 0; // Cooldown after returning food
+  public depenetrationDistThisFrame: number = 0; // Track depenetration pushes (not real movement)
   private worldWidth: number = 8000;
   private worldHeight: number = 8000;
   private followingTrail: boolean = false; // Track if currently following a pheromone trail
 
   // Memory fields (redesign task 4)
   private lastHeading: number = 0; // Current heading in radians
+  private previousTargetHeading: number = 0; // Previous target heading for temporal smoothing
   private lastFoodPosition: Vector2 | null = null; // Position of last found food
   private timeSinceLastFood: number = 0; // Time elapsed since last food pickup
 
-  // Distance-based pheromone deposit tracking (replaces frame-based)
-  private accumDistFoodPher: number = 0; // Accumulated distance since last foodPher deposit
-  private accumDistHomePher: number = 0; // Accumulated distance since last homePher deposit
+  // Position-based pheromone deposit tracking (prevents circular deposits)
+  private lastFoodPheromoneDepositPos: Vector2 | null = null; // Last position where we deposited foodPher
+  private lastHomePheromoneDepositPos: Vector2 | null = null; // Last position where we deposited homePher
 
   // Trail following hysteresis to prevent mode flapping
   private onFoodTrail: boolean = false;
@@ -130,12 +138,16 @@ private stuckCounter: number = 0;
     this.sprite.y = position.y;
 
     this.lastPosition = { ...position };
+    this.lastDistToColony = Math.sqrt(
+      (position.x - colony.x) ** 2 + (position.y - colony.y) ** 2
+    );
 
     // Give ants an initial random velocity so they start exploring smoothly
     const randomAngle = Math.random() * Math.PI * 2;
     this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
     this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
     this.lastHeading = randomAngle;
+    this.previousTargetHeading = randomAngle; // Initialize temporal smoothing
     this.currentSpriteRotation = randomAngle + Math.PI / 2; // Initialize sprite rotation
   }
 
@@ -214,6 +226,18 @@ private stuckCounter: number = 0;
   public update(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     if (this.isDead) return;
 
+    // Sanity check: if RETURNING with no food, reset to FORAGING
+    // This shouldn't happen but fixes edge cases
+    if (this.state === AntState.RETURNING && this.carryingAmount <= 0) {
+      if (this.id === Ant.selectedAntId) {
+        console.log('[Selected Ant] Fixed RETURNING with 0 carrying - reset to FORAGING');
+      }
+      this.state = AntState.FORAGING;
+      this.hasFood = false;
+      this.stuckCounter = 0; // Reset stuck counter when fixing state
+      this.lastHomePheromoneDepositPos = null; // Reset for new foraging trail
+    }
+
     this.age += deltaTime;
 
     // Update memory: time since last food
@@ -228,6 +252,9 @@ private stuckCounter: number = 0;
       return;
     }
 
+    // Reset depenetration tracker for this frame
+    this.depenetrationDistThisFrame = 0;
+
     // Cap velocity at normal maxSpeed - no exceptions!
     let currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
     if (currentSpeed > this.maxSpeed) {
@@ -235,9 +262,15 @@ private stuckCounter: number = 0;
       this.velocity.y = (this.velocity.y / currentSpeed) * this.maxSpeed;
     }
 
-    // Count down return cooldown
+    // Count down cooldowns (clamp to prevent negative values)
     if (this.justReturnedTimer > 0) {
-      this.justReturnedTimer -= deltaTime;
+      this.justReturnedTimer = Math.max(0, this.justReturnedTimer - deltaTime);
+    }
+    if (this.unstuckRecoveryCooldown > 0) {
+      this.unstuckRecoveryCooldown = Math.max(0, this.unstuckRecoveryCooldown - deltaTime);
+    }
+    if (this.ignorePheromoneTimer > 0) {
+      this.ignorePheromoneTimer = Math.max(0, this.ignorePheromoneTimer - deltaTime);
     }
 
     // Process outputs (unless in cooldown period)
@@ -255,29 +288,93 @@ private stuckCounter: number = 0;
       this.position.y += this.velocity.y * deltaTime;
     }
 
+    // Calculate distance moved this frame (always, for debug panel)
+    const distMoved = Math.sqrt(
+      (this.position.x - this.lastPosition.x) ** 2 +
+      (this.position.y - this.lastPosition.y) ** 2
+    );
+    this.lastDistMoved = distMoved;
+
+    // Calculate "real" movement (exclude depenetration pushes which are fighting navigation)
+    const realMovement = Math.max(0, distMoved - this.depenetrationDistThisFrame);
 
     // THEN check if ant is stuck - but not during cooldown
     if (this.justReturnedTimer <= 0) {
-      const distMoved = Math.sqrt(
-        (this.position.x - this.lastPosition.x) ** 2 +
-        (this.position.y - this.lastPosition.y) ** 2
-      );
-
-      // Check current velocity magnitude (detect shimmering)
-      const currentSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
-
-      // Expected movement based on maxSpeed and deltaTime
-      const expectedMinMovement = this.maxSpeed * deltaTime * CONFIG.ANT_EXPECTED_MOVEMENT_RATIO;
-
-      // Stuck if: barely moving OR velocity got killed (shimmering)
-      if (distMoved < expectedMinMovement || currentSpeed < this.maxSpeed * CONFIG.ANT_EXPECTED_MOVEMENT_RATIO) {
-        this.stuckCounter += deltaTime;
+      // During recovery cooldown, skip stuck detection entirely - just let recovery run
+      if (this.unstuckRecoveryCooldown > 0) {
+        if (this.id === Ant.selectedAntId && this.stuckCounter > 0.1) {
+          console.log(`[Selected Ant] In recovery cooldown (${this.unstuckRecoveryCooldown.toFixed(2)}s), skipping stuck detection, counter: ${this.stuckCounter.toFixed(2)}s`);
+        }
       } else {
-        this.stuckCounter = 0;
+        // Normal stuck detection
+        const expectedMinMovement = this.maxSpeed * deltaTime * CONFIG.ANT_EXPECTED_MOVEMENT_RATIO;
+
+        let isStuck = false;
+
+        // For RETURNING ants, also check if making progress toward colony
+        if (this.state === AntState.RETURNING) {
+          const currentDistToColony = Math.sqrt(
+            (this.position.x - this.colony.x) ** 2 +
+            (this.position.y - this.colony.y) ** 2
+          );
+
+          // If moving but not getting closer to colony (or getting farther), navigationally stuck
+          if (realMovement >= expectedMinMovement) {
+            // Ant is moving, but is it making progress?
+            const progressTowardColony = this.lastDistToColony - currentDistToColony;
+
+            // Debug: log progress check (only for selected ant)
+            if (this.id === Ant.selectedAntId && progressTowardColony < expectedMinMovement * 0.5) {
+              console.log(`[Selected Ant] Nav stuck check: progress=${progressTowardColony.toFixed(3)}, threshold=${(expectedMinMovement * 0.5).toFixed(3)}, lastDist=${this.lastDistToColony.toFixed(1)}, currentDist=${currentDistToColony.toFixed(1)}`);
+            }
+
+            if (progressTowardColony < expectedMinMovement * 0.5) {
+              // Moving but not making progress toward colony = navigational stuck
+              isStuck = true;
+            }
+          } else {
+            // Not moving enough = collision stuck
+            isStuck = true;
+          }
+
+          this.lastDistToColony = currentDistToColony;
+        } else {
+          // FORAGING ants: just check if barely moving (collision stuck)
+          isStuck = realMovement < expectedMinMovement;
+        }
+
+        if (isStuck) {
+          this.stuckCounter += deltaTime;
+          // Debug: log when stuck counter increases (only for selected ant)
+          if (this.id === Ant.selectedAntId && this.stuckCounter > 0.1) {
+            console.log(`[Selected Ant] Stuck! distMoved: ${distMoved.toFixed(3)}, depenetration: ${this.depenetrationDistThisFrame.toFixed(3)}, realMovement: ${realMovement.toFixed(3)}, expected: ${expectedMinMovement.toFixed(3)}, counter: ${this.stuckCounter.toFixed(2)}s`);
+          }
+        } else {
+          // Only decay if making GOOD progress (2x expected or more)
+          // Slight movements don't reset stuck progress to prevent oscillation
+          if (this.stuckCounter > 0) {
+            const goodMovementThreshold = expectedMinMovement * 2.0;
+
+            if (realMovement >= goodMovementThreshold) {
+              // Making excellent progress - decay counter
+              const oldCounter = this.stuckCounter;
+              this.stuckCounter = Math.max(0, this.stuckCounter - deltaTime * 0.5);
+
+              if (this.id === Ant.selectedAntId && oldCounter > 0.1 && this.stuckCounter < 0.1) {
+                console.log(`[Selected Ant] Good progress, counter decayed: ${oldCounter.toFixed(2)}s -> ${this.stuckCounter.toFixed(2)}s (moved ${realMovement.toFixed(3)} vs threshold ${goodMovementThreshold.toFixed(3)})`);
+              }
+            }
+            // Else: Minor movement, don't decay (counter stays the same)
+          }
+        }
       }
 
       // If stuck, smoothly reverse and turn (no teleport)
       if (this.stuckCounter > CONFIG.ANT_STUCK_THRESHOLD) {
+        if (this.id === Ant.selectedAntId) {
+          console.log(`[Selected Ant] Triggering unstuck recovery (counter: ${this.stuckCounter.toFixed(2)}s)`);
+        }
+
         // Steer backward with jitter
         const back = { x: -this.velocity.x, y: -this.velocity.y };
         const backMag = Math.hypot(back.x, back.y);
@@ -288,6 +385,10 @@ private stuckCounter: number = 0;
           const ang = Math.atan2(back.y, back.x) + jitter;
           const dir = { x: Math.cos(ang), y: Math.sin(ang) };
           this.setDirection(dir, deltaTime);
+
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Selected Ant] Unstuck: reversing to angle ${(ang * 180 / Math.PI).toFixed(1)}°`);
+          }
 
           // Slow down temporarily to unstick smoothly
           const v = Math.hypot(this.velocity.x, this.velocity.y);
@@ -300,97 +401,120 @@ private stuckCounter: number = 0;
           const randomAngle = Math.random() * Math.PI * 2;
           const dir = { x: Math.cos(randomAngle), y: Math.sin(randomAngle) };
           this.setDirection(dir, deltaTime);
+
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Selected Ant] Unstuck: picking random direction ${(randomAngle * 180 / Math.PI).toFixed(1)}°`);
+          }
         }
 
         this.stuckCounter = 0;
+        this.unstuckRecoveryCooldown = 2.0; // 2 second cooldown to allow escape
+        this.ignorePheromoneTimer = 5.0; // 5 seconds of ignoring pheromones to escape loops
         this.followingTrail = false;
         this.onFoodTrail = false; // Exit trail mode
-        this.explorationCommitment = 0; // Reset exploration when stuck
+        this.explorationCommitment = 0; // Reset exploration commitment so ant can pick a new direction
+        this.levyStepRemaining = 0; // Force scouts to pick new Lévy direction (abandon problematic target)
+
+        if (this.id === Ant.selectedAntId) {
+          console.log(`[Selected Ant] Unstuck complete, counter reset to 0, cooldown set to 2.0s, ignoring pheromones for 5.0s, Lévy step reset`);
+        }
       }
     }
 
-    // Track distance moved for pheromone deposits
-    const distMoved = Math.sqrt(
-      (this.position.x - this.lastPosition.x) ** 2 +
-      (this.position.y - this.lastPosition.y) ** 2
-    );
-
-    // Distance-based pheromone deposits
+    // Position-based pheromone deposits (prevents deposits from rotation/circling)
     if (obstacleManager) {
       if (this.state === AntState.RETURNING && this.foodSourceId) {
         // Returning with food - deposit foodPher
-        this.accumDistFoodPher += distMoved;
+        // Check if we've moved far enough from last deposit position
+        let shouldDeposit = false;
 
-        while (this.accumDistFoodPher >= CONFIG.PHEROMONE_DEPOSIT_DISTANCE) {
-          // Interpolate position where deposit should occur
-          const ratio = (this.accumDistFoodPher - CONFIG.PHEROMONE_DEPOSIT_DISTANCE) / distMoved;
-          const depositX = this.position.x - (this.position.x - this.lastPosition.x) * ratio;
-          const depositY = this.position.y - (this.position.y - this.lastPosition.y) * ratio;
+        if (this.lastFoodPheromoneDepositPos === null) {
+          shouldDeposit = true;
+        } else {
+          const dx = this.position.x - this.lastFoodPheromoneDepositPos.x;
+          const dy = this.position.y - this.lastFoodPheromoneDepositPos.y;
+          const spatialDist = Math.sqrt(dx * dx + dy * dy);
 
+          if (spatialDist >= CONFIG.PHEROMONE_DEPOSIT_DISTANCE) {
+            shouldDeposit = true;
+          }
+        }
+
+        if (shouldDeposit) {
           // Deposit amount = strength_per_unit * deposit_distance
           const amount = CONFIG.PHEROMONE_FORAGER_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE;
 
           this.pheromoneGrid.depositPheromone(
-            depositX,
-            depositY,
+            this.position.x,
+            this.position.y,
             'foodPher',
             amount,
             this.foodSourceId,
             obstacleManager
           );
 
-          this.accumDistFoodPher -= CONFIG.PHEROMONE_DEPOSIT_DISTANCE;
+          // Update last deposit position
+          this.lastFoodPheromoneDepositPos = { x: this.position.x, y: this.position.y };
         }
       } else {
         // Foraging - deposit homePher based on role
-        this.accumDistHomePher += distMoved;
+        // Check if we've moved far enough from last deposit position
+        let shouldDeposit = false;
 
-        while (this.accumDistHomePher >= CONFIG.PHEROMONE_DEPOSIT_DISTANCE) {
-          const ratio = (this.accumDistHomePher - CONFIG.PHEROMONE_DEPOSIT_DISTANCE) / distMoved;
-          const depositX = this.position.x - (this.position.x - this.lastPosition.x) * ratio;
-          const depositY = this.position.y - (this.position.y - this.lastPosition.y) * ratio;
+        if (this.lastHomePheromoneDepositPos === null) {
+          shouldDeposit = true;
+        } else {
+          const dx = this.position.x - this.lastHomePheromoneDepositPos.x;
+          const dy = this.position.y - this.lastHomePheromoneDepositPos.y;
+          const spatialDist = Math.sqrt(dx * dx + dy * dy);
 
-          // Scouts deposit with fade-in based on distance from colony
-          if (this.role === AntRole.SCOUT) {
-            const distFromColony = Math.sqrt(
-              (depositX - this.colony.x) ** 2 + (depositY - this.colony.y) ** 2
-            );
-
-            // Fade in trail strength based on distance from colony (no hard gate)
-            const fadeStart = CONFIG.LEVY_SCOUT_HOMEPHER_FADE_START;
-            const fadeFactor = Math.min(1.0, Math.max(0, (distFromColony - fadeStart) / fadeStart));
-
-            const amount = CONFIG.PHEROMONE_SCOUT_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * fadeFactor;
-
-            if (amount > 0.001) { // Only deposit if significant
-              this.pheromoneGrid.depositPheromone(
-                depositX,
-                depositY,
-                'homePher',
-                amount,
-                undefined,
-                obstacleManager
-              );
-            }
+          if (spatialDist >= CONFIG.PHEROMONE_DEPOSIT_DISTANCE) {
+            shouldDeposit = true;
           }
-          // Foragers can optionally deposit weak homePher too (trail reinforcement)
-          // Currently disabled - uncomment if desired
-          /*
-          else {
-            const amount = CONFIG.PHEROMONE_FORAGER_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * 0.5;
+        }
+
+        if (shouldDeposit && this.role === AntRole.SCOUT) {
+          // Scouts deposit with fade-in based on distance from colony
+          const distFromColony = Math.sqrt(
+            (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+          );
+
+          // Fade in trail strength based on distance from colony (no hard gate)
+          const fadeStart = CONFIG.LEVY_SCOUT_HOMEPHER_FADE_START;
+          const fadeFactor = Math.min(1.0, Math.max(0, (distFromColony - fadeStart) / fadeStart));
+
+          const amount = CONFIG.PHEROMONE_SCOUT_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * fadeFactor;
+
+          if (amount > 0.001) { // Only deposit if significant
             this.pheromoneGrid.depositPheromone(
-              depositX,
-              depositY,
+              this.position.x,
+              this.position.y,
               'homePher',
               amount,
               undefined,
               obstacleManager
             );
-          }
-          */
 
-          this.accumDistHomePher -= CONFIG.PHEROMONE_DEPOSIT_DISTANCE;
+            // Update last deposit position
+            this.lastHomePheromoneDepositPos = { x: this.position.x, y: this.position.y };
+          }
         }
+        // Foragers can optionally deposit weak homePher too (trail reinforcement)
+        // Currently disabled - uncomment if desired
+        /*
+        else if (shouldDeposit) {
+          const amount = CONFIG.PHEROMONE_FORAGER_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * 0.5;
+          this.pheromoneGrid.depositPheromone(
+            this.position.x,
+            this.position.y,
+            'homePher',
+            amount,
+            undefined,
+            obstacleManager
+          );
+          this.lastHomePheromoneDepositPos = { x: this.position.x, y: this.position.y };
+        }
+        */
       }
     }
 
@@ -467,14 +591,22 @@ private stuckCounter: number = 0;
       foodDistance: distance,
     };
 
-    // Check for obstacle collision along ray
+    // Check for obstacle collision along ray - simplified sampling method
     if (obstacleManager) {
-      const collision = obstacleManager.checkCollision({ x: endX, y: endY }, 5);
-      if (collision) {
-        result.hitObstacle = true;
-        const dx = endX - this.position.x;
-        const dy = endY - this.position.y;
-        result.obstacleDistance = Math.sqrt(dx * dx + dy * dy) * CONFIG.FOV_OBSTACLE_DISTANCE_SAFETY; // Slightly shorter to be safe
+      // Sample 3 points along the ray (start, middle, end) for performance
+      const samplePoints = [
+        { x: this.position.x + dirX * (distance * 0.33), y: this.position.y + dirY * (distance * 0.33), dist: distance * 0.33 },
+        { x: this.position.x + dirX * (distance * 0.67), y: this.position.y + dirY * (distance * 0.67), dist: distance * 0.67 },
+        { x: endX, y: endY, dist: distance }
+      ];
+
+      for (const sample of samplePoints) {
+        const collision = obstacleManager.checkCollision(sample, CONFIG.ANT_COLLISION_RADIUS);
+        if (collision) {
+          result.hitObstacle = true;
+          result.obstacleDistance = sample.dist * CONFIG.FOV_OBSTACLE_DISTANCE_SAFETY;
+          break;
+        }
       }
     }
 
@@ -579,18 +711,24 @@ private stuckCounter: number = 0;
 
       // Depenetrate from circular obstacles
       for (const w of walls) {
-        const dx = this.position.x - w.position.x;
-        const dy = this.position.y - w.position.y;
+        const wCollisionX = w.position.x + w.collisionOffset.x;
+        const wCollisionY = w.position.y + w.collisionOffset.y;
+        const dx = this.position.x - wCollisionX;
+        const dy = this.position.y - wCollisionY;
         const dist = Math.hypot(dx, dy);
         const minDist = r + w.radius;
 
         if (dist < minDist && dist > 0.001) {
           // Push out
           const overlap = minDist - dist;
+          const pushDist = overlap + CONFIG.PHYS_SKIN;
           const nx = dx / dist;
           const ny = dy / dist;
-          this.position.x += nx * (overlap + CONFIG.PHYS_SKIN);
-          this.position.y += ny * (overlap + CONFIG.PHYS_SKIN);
+          this.position.x += nx * pushDist;
+          this.position.y += ny * pushDist;
+
+          // Track depenetration distance (this is not "real" movement)
+          this.depenetrationDistThisFrame += pushDist;
         }
       }
 
@@ -607,8 +745,10 @@ private stuckCounter: number = 0;
         let bestWall: any = null;
 
         for (const w of walls) {
-          // Swept circle vs circle collision
-          const hit = this.sweepCircleVsCircle(this.position.x, this.position.y, r, dx, dy, w.position.x, w.position.y, w.radius);
+          // Swept circle vs circle collision - use collision position
+          const wCollisionX = w.position.x + w.collisionOffset.x;
+          const wCollisionY = w.position.y + w.collisionOffset.y;
+          const hit = this.sweepCircleVsCircle(this.position.x, this.position.y, r, dx, dy, wCollisionX, wCollisionY, w.radius);
 
           if (hit.hit && hit.t < bestT) {
             bestT = hit.t;
@@ -632,6 +772,9 @@ private stuckCounter: number = 0;
         // Push out by skin
         this.position.x += bestN.x * CONFIG.PHYS_SKIN;
         this.position.y += bestN.y * CONFIG.PHYS_SKIN;
+
+        // Track skin push as depenetration (not real movement)
+        this.depenetrationDistThisFrame += CONFIG.PHYS_SKIN;
 
         // Remember collision normal
         this.lastCollisionN = { x: bestN.x, y: bestN.y };
@@ -713,13 +856,27 @@ private stuckCounter: number = 0;
   }
 
   private steerToward(dir: Vector2, dt: number) {
-    // clamp turn rate
     const curAng = Math.atan2(this.velocity.y, this.velocity.x);
-    const tgtAng = Math.atan2(dir.y, dir.x);
-    let dAng = ((tgtAng - curAng + Math.PI*3) % (Math.PI*2)) - Math.PI;
+    const rawTargetAng = Math.atan2(dir.y, dir.x);
+
+    // Temporal smoothing: blend previous target with new target
+    let dAng = ((rawTargetAng - this.previousTargetHeading + Math.PI*3) % (Math.PI*2)) - Math.PI;
+    const smoothedTargetAng = this.previousTargetHeading + dAng * CONFIG.ANT_HEADING_SMOOTHING;
+
+    // CRITICAL FIX: Normalize smoothedTargetAng to prevent unbounded accumulation
+    // This prevents the modulo wrapping from breaking over time
+    this.previousTargetHeading = Math.atan2(Math.sin(smoothedTargetAng), Math.cos(smoothedTargetAng));
+
+    // Clamp turn rate
+    dAng = ((this.previousTargetHeading - curAng + Math.PI*3) % (Math.PI*2)) - Math.PI;
     const maxTurn = CONFIG.ANT_MAX_TURN * dt;
     dAng = Math.max(-maxTurn, Math.min(maxTurn, dAng));
     const newAng = curAng + dAng;
+
+    // Debug spinning ants (only for selected)
+    if (this.id === Ant.selectedAntId && Math.abs(dAng) > Math.PI / 4) {
+      console.log(`[Selected Ant] Large turn: dAng=${(dAng * 180 / Math.PI).toFixed(1)}°, curAng=${(curAng * 180 / Math.PI).toFixed(1)}°, targetAng=${(this.previousTargetHeading * 180 / Math.PI).toFixed(1)}°`);
+    }
 
     // target speed is max; accelerate toward it
     const v = Math.hypot(this.velocity.x, this.velocity.y);
@@ -827,11 +984,17 @@ private stuckCounter: number = 0;
 
     // If food is nearby, head straight to it using smooth steering
     if (nearestFood) {
-      const dir = {
-        x: nearestFood.position.x - this.position.x,
-        y: nearestFood.position.y - this.position.y
-      };
-      this.setDirection(dir, deltaTime);
+      let dirX = nearestFood.position.x - this.position.x;
+      let dirY = nearestFood.position.y - this.position.y;
+
+      // Apply obstacle avoidance when stuck
+      if (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0) {
+        const repulsion = this.getObstacleRepulsion(obstacleManager);
+        dirX += repulsion.x * 2.0; // Strong avoidance during recovery
+        dirY += repulsion.y * 2.0;
+      }
+
+      this.setDirection({ x: dirX, y: dirY }, deltaTime);
       this.explorationCommitment = 0; // Reset exploration when food is found
       return;
     }
@@ -886,7 +1049,17 @@ private stuckCounter: number = 0;
       }
 
       if (bestDir) {
-        this.setDirection(bestDir, deltaTime);
+        let dirX = bestDir.x;
+        let dirY = bestDir.y;
+
+        // Apply obstacle avoidance when stuck
+        if (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0) {
+          const repulsion = this.getObstacleRepulsion(obstacleManager);
+          dirX += repulsion.x * 2.0; // Strong avoidance during recovery
+          dirY += repulsion.y * 2.0;
+        }
+
+        this.setDirection({ x: dirX, y: dirY }, deltaTime);
         return;
       }
     }
@@ -1019,6 +1192,10 @@ private stuckCounter: number = 0;
         // Far from colony - fully random
         this.levyDirection = Math.random() * Math.PI * 2;
       }
+
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[Selected Ant] New Lévy step: length=${this.levyStepRemaining.toFixed(1)}, direction=${(this.levyDirection * 180 / Math.PI).toFixed(1)}°`);
+      }
     }
 
     // Continue in current Lévy direction using smooth steering
@@ -1036,16 +1213,31 @@ private stuckCounter: number = 0;
     if (repulsionMag > CONFIG.SCOUT_OBSTACLE_REPULSION_THRESHOLD) {
       // Only avoid very close obstacles - use steering
       const avoidDir = { x: repulsion.x, y: repulsion.y };
+
+      // Use stronger avoidance when stuck/recovering
+      const avoidWeight = (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0)
+        ? 2.0  // Strong avoidance during recovery
+        : CONFIG.SCOUT_OBSTACLE_CORRECTION_WEIGHT; // Normal (0.3)
+
       // Blend current direction with avoidance
       const blendedDir = {
-        x: dir.x + avoidDir.x * CONFIG.SCOUT_OBSTACLE_CORRECTION_WEIGHT,
-        y: dir.y + avoidDir.y * CONFIG.SCOUT_OBSTACLE_CORRECTION_WEIGHT
+        x: dir.x + avoidDir.x * avoidWeight,
+        y: dir.y + avoidDir.y * avoidWeight
       };
+
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[Selected Ant] Obstacle avoidance active, repulsionMag=${repulsionMag.toFixed(2)}, weight=${avoidWeight.toFixed(1)}`);
+      }
+
       this.setDirection(blendedDir, deltaTime);
 
       // Only reset Lévy step if VERY close to obstacle
       if (repulsionMag > CONFIG.SCOUT_OBSTACLE_RESET_LEVY_THRESHOLD) {
         this.levyStepRemaining = 0;
+
+        if (this.id === Ant.selectedAntId) {
+          console.log(`[Selected Ant] Resetting Lévy step due to close obstacle`);
+        }
       }
     }
 
@@ -1056,21 +1248,6 @@ private stuckCounter: number = 0;
   private updateReturningBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // Pheromone deposits now handled by distance-based system in update() method
 
-    // Get homePher gradient (preserves magnitude)
-    const gradient = this.pheromoneGrid.getPheromoneGradient(
-      this.position.x,
-      this.position.y,
-      'homePher'
-    );
-
-    // Compute gradient magnitude for weighting
-    const gradMag = Math.hypot(gradient.x, gradient.y);
-
-    // Apply soft threshold to gradient magnitude
-    const mEff = Math.max(0, Math.min(1,
-      (gradMag - CONFIG.GRADIENT_MIN_THRESHOLD) / CONFIG.GRADIENT_SPAN
-    ));
-
     const toColony = {
       x: this.colony.x - this.position.x,
       y: this.colony.y - this.position.y,
@@ -1078,20 +1255,50 @@ private stuckCounter: number = 0;
     const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
     const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 1, y: 0 };
 
-    // Magnitude-aware blending: stronger gradients pull harder
-    // When gradient is strong (mEff → 1), follow it more
-    // When gradient is weak (mEff → 0), rely on colony vector
-    const gradientWeight = CONFIG.RETURNING_GRADIENT_WEIGHT * mEff;
-    const colonyWeight = CONFIG.RETURNING_COLONY_WEIGHT + CONFIG.RETURNING_GRADIENT_WEIGHT * (1 - mEff);
+    let dirX: number;
+    let dirY: number;
 
-    let dirX = colonyDir.x * colonyWeight;
-    let dirY = colonyDir.y * colonyWeight;
+    // If stuck OR in recovery (ignore pheromone timer active), navigate directly to colony
+    // This prevents getting trapped in pheromone loops
+    if (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0) {
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[Selected Ant] Ignoring gradients (stuck: ${this.stuckCounter.toFixed(2)}s, ignore timer: ${this.ignorePheromoneTimer.toFixed(2)}s), navigating directly to colony`);
+      }
+      // Direct navigation only
+      dirX = colonyDir.x;
+      dirY = colonyDir.y;
+    } else {
+      // Normal gradient-based navigation
+      // Get homePher gradient (preserves magnitude)
+      const gradient = this.pheromoneGrid.getPheromoneGradient(
+        this.position.x,
+        this.position.y,
+        'homePher'
+      );
 
-    if (gradMag > 0) {
-      const gradDirX = gradient.x / gradMag;
-      const gradDirY = gradient.y / gradMag;
-      dirX += gradDirX * gradientWeight;
-      dirY += gradDirY * gradientWeight;
+      // Compute gradient magnitude for weighting
+      const gradMag = Math.hypot(gradient.x, gradient.y);
+
+      // Apply soft threshold to gradient magnitude
+      const mEff = Math.max(0, Math.min(1,
+        (gradMag - CONFIG.GRADIENT_MIN_THRESHOLD) / CONFIG.GRADIENT_SPAN
+      ));
+
+      // Magnitude-aware blending: stronger gradients pull harder
+      // When gradient is strong (mEff → 1), follow it more
+      // When gradient is weak (mEff → 0), rely on colony vector
+      const gradientWeight = CONFIG.RETURNING_GRADIENT_WEIGHT * mEff;
+      const colonyWeight = CONFIG.RETURNING_COLONY_WEIGHT + CONFIG.RETURNING_GRADIENT_WEIGHT * (1 - mEff);
+
+      dirX = colonyDir.x * colonyWeight;
+      dirY = colonyDir.y * colonyWeight;
+
+      if (gradMag > 0) {
+        const gradDirX = gradient.x / gradMag;
+        const gradDirY = gradient.y / gradMag;
+        dirX += gradDirX * gradientWeight;
+        dirY += gradDirY * gradientWeight;
+      }
     }
 
     // Normalize
@@ -1102,9 +1309,14 @@ private stuckCounter: number = 0;
     }
 
     // Apply obstacle repulsion (Task 12)
+    // Use much stronger repulsion during recovery to help escape
     const repulsion = this.getObstacleRepulsion(obstacleManager);
-    dirX += repulsion.x * CONFIG.RETURNING_OBSTACLE_REPULSION_WEIGHT;
-    dirY += repulsion.y * CONFIG.RETURNING_OBSTACLE_REPULSION_WEIGHT;
+    const repulsionWeight = (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0)
+      ? 2.0  // Strong avoidance during recovery
+      : CONFIG.RETURNING_OBSTACLE_REPULSION_WEIGHT; // Normal avoidance (0.2)
+
+    dirX += repulsion.x * repulsionWeight;
+    dirY += repulsion.y * repulsionWeight;
 
     // Use smooth steering instead of direct velocity assignment
     const dir = { x: dirX, y: dirY };
@@ -1139,12 +1351,19 @@ private stuckCounter: number = 0;
     if (dist < pickupRadius && amountAvailable > 0) {
       // Take a chunk: min(available, carry capacity)
       const amountToTake = Math.min(amountAvailable, this.carryCapacity);
+
+      // Only transition to RETURNING if we actually got food
+      if (amountToTake <= 0) return 0;
+
       this.carryingAmount = amountToTake;
 
       // State transition: Foraging -> Returning
       this.state = AntState.RETURNING;
       this.hasFood = true; // Keep for backward compatibility
       this.foodSourceId = foodSourceId || null; // Remember which food source this came from
+
+      // Reset pheromone deposit position for new trail
+      this.lastFoodPheromoneDepositPos = null;
 
       // Update memory: remember this food location and reset timer
       this.lastFoodPosition = { x: foodPosition.x, y: foodPosition.y };
@@ -1200,12 +1419,17 @@ private stuckCounter: number = 0;
       this.foodSourceId = null; // Clear food source ID
       this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_COLONY); // Restore some energy
       this.explorationCommitment = 0; // Reset exploration when returning to colony
+      this.lastHomePheromoneDepositPos = null; // Reset for new foraging trail
 
       // Push ant away from colony slightly to prevent clustering
       if (dist > 0) {
-        // Direction away from colony (normalized)
-        const dirX = dx / dist;
-        const dirY = dy / dist;
+        // Direction away from colony (normalized) with random variation to disperse clumps
+        const baseAngle = Math.atan2(dy, dx);
+        const randomSpread = (Math.random() - 0.5) * Math.PI * 0.5; // ±45° variation
+        const finalAngle = baseAngle + randomSpread;
+
+        const dirX = Math.cos(finalAngle);
+        const dirY = Math.sin(finalAngle);
 
         // Give ant outward velocity to move away
         this.velocity.x = dirX * this.maxSpeed;

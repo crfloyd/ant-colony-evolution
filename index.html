@@ -73,6 +73,15 @@
         <div class="metric"><span class="label">Returning:</span> <span id="returningPct">0%</span></div>
         <div class="metric"><span class="label">Food/Min:</span> <span id="foodPerMin">0</span></div>
       </div>
+      <div id="antDebugPanel" style="display: none;">
+        <h3>Ant Debug Info
+          <button id="copyAntDebug" style="float: right; cursor: pointer; margin-left: 8px;">📋</button>
+          <button id="closeAntDebug" style="float: right; cursor: pointer;">✕</button>
+        </h3>
+        <div id="antDebugContent"></div>
+        <button id="unstuckAntBtn" class="util-btn" style="width: 100%; margin-top: 10px; pointer-events: auto;">🔄 Trigger Unstuck</button>
+      </div>
+
       <div id="debugPanel" style="display: none;">
         <h3>Rock Distribution</h3>
 

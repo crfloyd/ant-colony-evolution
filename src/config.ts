@@ -45,7 +45,8 @@ export const OBSTACLE_DEFAULT_COLLISION_RADIUS = 10; // Default entity radius fo
 export const ANT_MAX_SPEED = 3;
 export const ANT_MAX_ACCEL = 20;      // units/s² (tune 10–40)
 export const ANT_MAX_TURN = Math.PI;  // rad/s (tune 2–6 for smoother)
-export const ANT_MIN_SPEED = 0.2;     // keep small floor to avoid “stall”
+export const ANT_MIN_SPEED = 0.2;     // keep small floor to avoid "stall"
+export const ANT_HEADING_SMOOTHING = 0.5; // Temporal smoothing factor (0=no smoothing, 1=instant)
 export const ANT_STARTING_ENERGY = 200; // Starting energy per ant
 export const ANT_ENERGY_DRAIN = 0.03; // Ants starve in ~2 minutes without food
 export const ANT_ENERGY_FROM_FOOD_PICKUP = 10; // Energy restored when finding food
@@ -69,12 +70,12 @@ export const FORAGER_MAX_CARRY_CAPACITY = 2; // Maximum forager carry capacity
 // Ant physics and collision
 export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
 export const ANT_SAFE_DISTANCE_FROM_OBSTACLE = 20; // Safe push distance from obstacles
-export const ANT_STUCK_THRESHOLD = 0.5; // Seconds before ant is considered stuck
+export const ANT_STUCK_THRESHOLD = 1.0; // Seconds before ant triggers unstuck recovery (increased to allow counter to show)
 export const ANT_STUCK_BACKUP_DISTANCE = 10; // Distance to backup when stuck
 export const ANT_WORLD_BOUNDARY_MARGIN = 50; // Margin from world edges
 export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy drains
 export const ANT_EXPECTED_MOVEMENT_RATIO = 0.3; // Minimum expected movement for stuck detection
-export const ANT_JUST_RETURNED_COOLDOWN = 5; // Frames of free movement after returning (short to prevent clumping)
+export const ANT_JUST_RETURNED_COOLDOWN = 15; // Frames of free movement after returning to disperse
 export const PHYS_MAX_SWEEP_ITERS = 3;
 export const PHYS_EPS = 0.001;             // numeric slop
 export const PHYS_SKIN = 2.0;              // push-out after contact (increased to prevent sticking)
@@ -137,14 +138,14 @@ export const FORAGING_TRAIL_MIN_LEVEL = 0.01; // Minimum pheromone to consider f
 export const FORAGING_TRAIL_SAMPLE_MIN = 0.003; // Minimum pheromone in sample direction (adjusted for new strengths)
 
 // Exploration commitment (smooth exploration movement)
-export const FORAGING_EXPLORATION_MIN_DURATION = 2.0; // Minimum seconds to commit to a direction
-export const FORAGING_EXPLORATION_MAX_DURATION = 5.0; // Maximum seconds to commit to a direction
+export const FORAGING_EXPLORATION_MIN_DURATION = 0.5; // Minimum seconds to commit to a direction
+export const FORAGING_EXPLORATION_MAX_DURATION = 1.5; // Maximum seconds to commit to a direction
 
 // Trail following hysteresis (prevents mode flapping at trail edges)
-export const TRAIL_ENTER_LEVEL = 0.06; // Higher threshold to start following
-export const TRAIL_EXIT_LEVEL = 0.03; // Lower threshold to stop (hysteresis)
-export const TRAIL_LATCH_TIME = 0.4; // Seconds to stay in mode
-export const TRAIL_END_COOLDOWN = 0.6; // Seconds to ignore trails after exiting
+export const TRAIL_ENTER_LEVEL = 0.08; // Higher threshold to start following
+export const TRAIL_EXIT_LEVEL = 0.02; // Lower threshold to stop (hysteresis)
+export const TRAIL_LATCH_TIME = 0.8; // Seconds to stay in mode
+export const TRAIL_END_COOLDOWN = 0.3; // Seconds to ignore trails after exiting
 
 // Returning behavior
 export const RETURNING_COLONY_WEIGHT = 0.7; // Weight for direct colony direction

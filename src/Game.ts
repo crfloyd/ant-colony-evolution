@@ -5,6 +5,7 @@ import { Colony } from './Colony';
 import { FoodManager } from './Food';
 import { ObstacleManager } from './Obstacle';
 import { Metrics } from './Metrics';
+import { Ant } from './Ant';
 import * as CONFIG from './config';
 
 // Global ant sprite textures
@@ -38,6 +39,8 @@ export class Game {
   private worldWidth: number = CONFIG.WORLD_WIDTH;
   private worldHeight: number = CONFIG.WORLD_HEIGHT;
   private showRockColliders: boolean = false;
+  private selectedAnt: any = null;
+  private selectionGraphics: Graphics | null = null;
 
   // UI elements
   private antCountEl: HTMLElement;
@@ -411,9 +414,13 @@ export class Game {
     // Handle window resize
     window.addEventListener('resize', () => this.onResize());
 
+    // Add click handler for ant debugging
+    this.app.canvas.addEventListener('click', (e) => this.onCanvasClick(e));
+
     console.log('Game fully initialized!');
     console.log('Colony ants:', this.colony.getAntCount());
     console.log('Food sources:', this.foodManager.getFoodSources().length);
+    console.log('Click on any ant to see debug info');
   }
 
   private drawWorldBounds(): void {
@@ -429,8 +436,339 @@ export class Game {
     this.worldContainer.addChild(bounds);
   }
 
+  private onCanvasClick(e: MouseEvent): void {
+    // Get click position relative to canvas
+    const rect = this.app.canvas.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+
+    // Convert to world coordinates
+    // Camera container offset is applied to the world, so reverse it
+    const worldX = (screenX - this.camera.container.x) / this.camera.zoom;
+    const worldY = (screenY - this.camera.container.y) / this.camera.zoom;
+
+    console.log('Click at screen:', screenX.toFixed(0), screenY.toFixed(0), 'world:', worldX.toFixed(0), worldY.toFixed(0), 'zoom:', this.camera.zoom.toFixed(2));
+
+    // Find closest ant within 100 pixels (in world space)
+    const ants = this.colony.ants;
+    let closestAnt: any = null;
+    let closestDist = 100;
+
+    for (const ant of ants) {
+      const dx = ant.position.x - worldX;
+      const dy = ant.position.y - worldY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestAnt = ant;
+      }
+    }
+
+    if (closestAnt) {
+      console.log('Found ant at distance:', closestDist.toFixed(1));
+      this.selectedAnt = closestAnt;
+      Ant.selectedAntId = closestAnt.id;
+      this.showAntDebugPanel(closestAnt);
+    } else {
+      console.log('No ant found within 100px');
+    }
+  }
+
+  private showAntDebugPanel(ant: any): void {
+    const panel = document.getElementById('antDebugPanel')!;
+    panel.style.display = 'block';
+
+    // Update the panel content
+    this.updateAntDebugPanel();
+
+    // Draw initial selection indicator
+    this.drawSelectionIndicator();
+  }
+
+  private updateAntDebugPanel(): void {
+    if (!this.selectedAnt) return;
+
+    const ant = this.selectedAnt;
+    const content = document.getElementById('antDebugContent')!;
+
+    const speed = Math.sqrt(ant.velocity.x ** 2 + ant.velocity.y ** 2);
+    const foodPher = this.pheromoneGrid.getPheromoneLevel(ant.position.x, ant.position.y, 'foodPher');
+    const homePher = this.pheromoneGrid.getPheromoneLevel(ant.position.x, ant.position.y, 'homePher');
+
+    // Check nearby obstacles
+    const nearbyObstacles = this.obstacleManager.getObstacles().filter((obs: any) => {
+      const dx = obs.position.x - ant.position.x;
+      const dy = obs.position.y - ant.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      return dist < 100;
+    });
+
+    let obstacleInfo = '<div class="debug-value">None within 100px</div>';
+    if (nearbyObstacles.length > 0) {
+      const closest = nearbyObstacles.reduce((closest: any, obs: any) => {
+        const dx1 = closest.position.x - ant.position.x;
+        const dy1 = closest.position.y - ant.position.y;
+        const dist1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+
+        const dx2 = obs.position.x - ant.position.x;
+        const dy2 = obs.position.y - ant.position.y;
+        const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+        return dist2 < dist1 ? obs : closest;
+      });
+
+      const dx = closest.position.x - ant.position.x;
+      const dy = closest.position.y - ant.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const clearance = dist - closest.radius;
+
+      const clearanceClass = clearance < 20 ? 'debug-error' : clearance < 40 ? 'debug-warning' : 'debug-value';
+      obstacleInfo = `
+        <div class="debug-row">
+          <span class="debug-label">Distance:</span>
+          <span class="${clearanceClass}">${dist.toFixed(1)}px</span>
+        </div>
+        <div class="debug-row">
+          <span class="debug-label">Clearance:</span>
+          <span class="${clearanceClass}">${clearance.toFixed(1)}px</span>
+        </div>
+        <div class="debug-row">
+          <span class="debug-label">Type:</span>
+          <span class="debug-value">${closest.sizeCategory}</span>
+        </div>
+      `;
+    }
+
+    const stuckClass = ant.stuckCounter > 0.1 ? 'debug-warning' : ant.stuckCounter > 0.15 ? 'debug-error' : 'debug-value';
+
+    content.innerHTML = `
+      <div class="debug-row">
+        <span class="debug-label">Position:</span>
+        <span class="debug-value">(${Math.round(ant.position.x)}, ${Math.round(ant.position.y)})</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Speed:</span>
+        <span class="debug-value">${speed.toFixed(2)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">State:</span>
+        <span class="debug-value">${ant.state === 'FORAGING' ? 'FORAGING' : 'RETURNING'}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Role:</span>
+        <span class="debug-value">${ant.role === 'FORAGER' ? 'FORAGER' : 'SCOUT'}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Energy:</span>
+        <span class="debug-value">${ant.energy.toFixed(1)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Carrying:</span>
+        <span class="debug-value">${ant.carryingAmount}</span>
+      </div>
+
+      <div class="debug-section-title">Behavior</div>
+      <div class="debug-row">
+        <span class="debug-label">Stuck counter:</span>
+        <span class="${stuckClass}">${ant.stuckCounter.toFixed(2)}s (triggers at > 1.0s)</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Recovery cooldown:</span>
+        <span class="debug-value">${(ant.unstuckRecoveryCooldown || 0).toFixed(2)}s</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Ignore pheromones:</span>
+        <span class="debug-value">${(ant.ignorePheromoneTimer || 0).toFixed(2)}s</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Dist moved:</span>
+        <span class="debug-value">${(ant.lastDistMoved || 0).toFixed(3)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Depenetration:</span>
+        <span class="debug-value">${(ant.depenetrationDistThisFrame || 0).toFixed(3)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Real movement:</span>
+        <span class="debug-value">${Math.max(0, (ant.lastDistMoved || 0) - (ant.depenetrationDistThisFrame || 0)).toFixed(3)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Exploration:</span>
+        <span class="debug-value">${ant.explorationCommitment.toFixed(2)}s</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">On trail:</span>
+        <span class="debug-value">${ant.onFoodTrail}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Trail latch:</span>
+        <span class="debug-value">${ant.trailLatchTimer.toFixed(2)}s</span>
+      </div>
+
+      <div class="debug-section-title">Pheromones</div>
+      <div class="debug-row">
+        <span class="debug-label">Food:</span>
+        <span class="debug-value">${foodPher.toFixed(3)}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Home:</span>
+        <span class="debug-value">${homePher.toFixed(3)}</span>
+      </div>
+
+      <div class="debug-section-title">Nearest Obstacle</div>
+      ${obstacleInfo}
+    `;
+  }
+
+  private drawSelectionIndicator(): void {
+    if (!this.selectedAnt) {
+      // Remove indicator if no ant selected
+      if (this.selectionGraphics) {
+        this.worldContainer.removeChild(this.selectionGraphics);
+        this.selectionGraphics.destroy();
+        this.selectionGraphics = null;
+      }
+      return;
+    }
+
+    // Create indicator if it doesn't exist
+    if (!this.selectionGraphics) {
+      this.selectionGraphics = new Graphics();
+      this.selectionGraphics.zIndex = 10001; // Above everything
+      this.worldContainer.addChild(this.selectionGraphics);
+    }
+
+    // Clear and redraw to show direction
+    this.selectionGraphics.clear();
+
+    // Circle around ant
+    this.selectionGraphics.circle(0, 0, 30);
+    this.selectionGraphics.stroke({ width: 3, color: 0x00ffff, alpha: 0.8 });
+
+    // Red direction ray
+    const ant = this.selectedAnt;
+    const heading = Math.atan2(ant.velocity.y, ant.velocity.x);
+    const rayLength = 50;
+    const rayX = Math.cos(heading) * rayLength;
+    const rayY = Math.sin(heading) * rayLength;
+
+    this.selectionGraphics.moveTo(0, 0);
+    this.selectionGraphics.lineTo(rayX, rayY);
+    this.selectionGraphics.stroke({ width: 4, color: 0xff0000, alpha: 1.0 });
+
+    // Update position to follow ant
+    this.selectionGraphics.x = this.selectedAnt.position.x;
+    this.selectionGraphics.y = this.selectedAnt.position.y;
+  }
+
   private setupUIControls(): void {
     const speedDisplay = document.getElementById('speedDisplay')!;
+
+    // Copy ant debug info
+    const copyAntDebugBtn = document.getElementById('copyAntDebug');
+    if (copyAntDebugBtn) {
+      copyAntDebugBtn.addEventListener('click', () => {
+        if (!this.selectedAnt) return;
+
+        const ant = this.selectedAnt;
+        const speed = Math.sqrt(ant.velocity.x ** 2 + ant.velocity.y ** 2);
+        const foodPher = this.pheromoneGrid.getPheromoneLevel(ant.position.x, ant.position.y, 'foodPher');
+        const homePher = this.pheromoneGrid.getPheromoneLevel(ant.position.x, ant.position.y, 'homePher');
+
+        // Check nearby obstacles
+        const nearbyObstacles = this.obstacleManager.getObstacles().filter((obs: any) => {
+          const dx = obs.position.x - ant.position.x;
+          const dy = obs.position.y - ant.position.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          return dist < 100;
+        });
+
+        let obstacleInfo = 'None within 100px';
+        if (nearbyObstacles.length > 0) {
+          const closest = nearbyObstacles.reduce((closest: any, obs: any) => {
+            const dx1 = closest.position.x - ant.position.x;
+            const dy1 = closest.position.y - ant.position.y;
+            const dist1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+            const dx2 = obs.position.x - ant.position.x;
+            const dy2 = obs.position.y - ant.position.y;
+            const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+            return dist2 < dist1 ? obs : closest;
+          });
+
+          const dx = closest.position.x - ant.position.x;
+          const dy = closest.position.y - ant.position.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const clearance = dist - closest.radius;
+          obstacleInfo = `Distance: ${dist.toFixed(1)}px, Clearance: ${clearance.toFixed(1)}px, Type: ${closest.sizeCategory}`;
+        }
+
+        const debugText = `
+Ant Debug Info
+==============
+Position: (${Math.round(ant.position.x)}, ${Math.round(ant.position.y)})
+Velocity: (${ant.velocity.x.toFixed(2)}, ${ant.velocity.y.toFixed(2)})
+Speed: ${speed.toFixed(2)}
+State: ${ant.state === 'FORAGING' ? 'FORAGING' : 'RETURNING'}
+Role: ${ant.role === 'FORAGER' ? 'FORAGER' : 'SCOUT'}
+Energy: ${ant.energy.toFixed(1)}
+Carrying: ${ant.carryingAmount}
+
+Behavior:
+Stuck counter: ${ant.stuckCounter.toFixed(2)}s (triggers at > 1.0s)
+Recovery cooldown: ${(ant.unstuckRecoveryCooldown || 0).toFixed(2)}s
+Ignore pheromones: ${(ant.ignorePheromoneTimer || 0).toFixed(2)}s
+Dist moved: ${(ant.lastDistMoved || 0).toFixed(3)}
+Depenetration: ${(ant.depenetrationDistThisFrame || 0).toFixed(3)}
+Real movement: ${Math.max(0, (ant.lastDistMoved || 0) - (ant.depenetrationDistThisFrame || 0)).toFixed(3)}
+Exploration: ${ant.explorationCommitment.toFixed(2)}s
+On trail: ${ant.onFoodTrail}
+Trail latch: ${ant.trailLatchTimer.toFixed(2)}s
+
+Pheromones:
+Food: ${foodPher.toFixed(3)}
+Home: ${homePher.toFixed(3)}
+
+Nearest Obstacle:
+${obstacleInfo}
+        `.trim();
+
+        navigator.clipboard.writeText(debugText).then(() => {
+          console.log('Debug info copied to clipboard');
+        }).catch(err => {
+          console.error('Failed to copy:', err);
+        });
+      });
+    }
+
+    // Unstuck ant button
+    const unstuckAntBtn = document.getElementById('unstuckAntBtn');
+    if (unstuckAntBtn) {
+      unstuckAntBtn.addEventListener('click', () => {
+        if (!this.selectedAnt) return;
+
+        console.log('Manually triggering unstuck behavior...');
+        // Force stuck counter above threshold to trigger recovery
+        this.selectedAnt.stuckCounter = 0.3;
+      });
+    }
+
+    // Close ant debug panel
+    const closeAntDebugBtn = document.getElementById('closeAntDebug');
+    if (closeAntDebugBtn) {
+      closeAntDebugBtn.addEventListener('click', () => {
+        const panel = document.getElementById('antDebugPanel')!;
+        panel.style.display = 'none';
+        this.selectedAnt = null;
+        Ant.selectedAntId = null;
+        if (this.selectionGraphics) {
+          this.worldContainer.removeChild(this.selectionGraphics);
+          this.selectionGraphics.destroy();
+          this.selectionGraphics = null;
+        }
+      });
+    }
+
 
     // Pause/Play button (starts playing, so show pause icon)
     const pauseBtn = document.getElementById('pauseBtn')!;
@@ -697,7 +1035,7 @@ export class Game {
 
     // Track metrics for all ants
     for (const ant of this.colony.ants) {
-      this.metrics.recordStateTime(ant.state === 0, adjustedDelta); // 0 = FORAGING
+      this.metrics.recordStateTime(ant.state === 'FORAGING', adjustedDelta);
     }
 
     // Check ant-food collisions (only for ants not carrying food)
@@ -732,6 +1070,12 @@ export class Game {
       this.foragingPctEl.textContent = `${Math.round(this.metrics.getForagingPercentage())}%`;
       this.returningPctEl.textContent = `${Math.round(this.metrics.getReturningPercentage())}%`;
       this.foodPerMinEl.textContent = this.metrics.getFoodPerMinute().toFixed(1);
+    }
+
+    // Update ant debug panel if ant is selected (live updates)
+    if (this.selectedAnt) {
+      this.updateAntDebugPanel();
+      this.drawSelectionIndicator();
     }
   }
 
