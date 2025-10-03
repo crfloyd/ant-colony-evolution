@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Assets, Texture, Rectangle } from 'pixi.js';
+import { Application, Container, Graphics, Assets, Texture, Rectangle, TilingSprite, Sprite } from 'pixi.js';
 import { Camera } from './Camera';
 import { PheromoneGrid } from './PheromoneGrid';
 import { Colony } from './Colony';
@@ -9,6 +9,19 @@ import * as CONFIG from './config';
 
 // Global ant sprite textures
 export let antSpriteTextures: Texture[] | null = null;
+export let scoutSpriteTextures: Texture[] | null = null;
+export let colonyMoundTexture: Texture | null = null;
+export let groundTexture: Texture | null = null;
+export let groundClutterTextures: Texture[] = [];
+
+// Rock sprite data: texture + size category
+export interface RockSprite {
+  texture: Texture;
+  category: 'small' | 'medium' | 'large';
+}
+export let rockSpritesLarge: Texture[] = [];
+export let rockSpritesMedium: Texture[] = [];
+export let rockSpritesSmall: Texture[] = [];
 
 export class Game {
   private app: Application;
@@ -24,8 +37,7 @@ export class Game {
   private simulationSpeed: number = 1;
   private worldWidth: number = CONFIG.WORLD_WIDTH;
   private worldHeight: number = CONFIG.WORLD_HEIGHT;
-  private showScoutTrails: boolean = true;
-  private showForagerTrails: boolean = true;
+  private showRockColliders: boolean = false;
 
   // UI elements
   private antCountEl: HTMLElement;
@@ -72,7 +84,7 @@ export class Game {
       canvas,
       width: window.innerWidth,
       height: window.innerHeight,
-      backgroundColor: 0xf5f5dc, // Beige/off-white background
+      backgroundColor: 0x5a9c3e, // Muted green (Stardew Valley style)
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     });
@@ -106,10 +118,207 @@ export class Game {
       console.error('Failed to load ant sprite sheet, using fallback graphics:', err);
     }
 
+    // Load scout sprite sheet
+    console.log('Loading scout sprite sheet...');
+    try {
+      const scoutSpriteSheet = await Assets.load('/scout_ant_sprite_sheet.png');
+
+      // Create textures from 8x8 grid (62 frames used, skip last 2 blank frames)
+      const frameWidth = scoutSpriteSheet.width / 8;
+      const frameHeight = scoutSpriteSheet.height / 8;
+      const textures: Texture[] = [];
+
+      let frameCount = 0;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          if (frameCount >= 62) break; // Skip last 2 blank frames
+          const rect = new Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight);
+          textures.push(new Texture({ source: scoutSpriteSheet.source, frame: rect }));
+          frameCount++;
+        }
+        if (frameCount >= 62) break;
+      }
+
+      scoutSpriteTextures = textures;
+      console.log(`Loaded ${textures.length} scout animation frames`);
+    } catch (err) {
+      console.error('Failed to load scout sprite sheet, using fallback to regular ant sprites:', err);
+    }
+
+    // Load colony mound sprite
+    console.log('Loading colony mound sprite...');
+    try {
+      colonyMoundTexture = await Assets.load('/ant-mound.png');
+      console.log('Loaded colony mound sprite');
+    } catch (err) {
+      console.error('Failed to load colony mound sprite, using fallback graphics:', err);
+    }
+
+    // Load ground clutter sprites
+    console.log('Loading ground clutter sprites...');
+    try {
+      // Load ground clutter images (1.png through 6.png)
+      const clutterFiles = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png'];
+
+      for (const file of clutterFiles) {
+        try {
+          const texture = await Assets.load(`/${file}`);
+          groundClutterTextures.push(texture);
+          console.log(`Loaded ground clutter: ${file}`);
+        } catch (err) {
+          // Skip if file doesn't exist
+          console.log(`Ground clutter ${file} not found, skipping...`);
+        }
+      }
+
+      if (groundClutterTextures.length > 0) {
+        console.log(`Loaded ${groundClutterTextures.length} ground clutter sprites`);
+      } else {
+        console.log('No ground clutter sprites found');
+      }
+    } catch (err) {
+      console.error('Failed to load ground clutter:', err);
+    }
+
+    // Load large rock sprite sheet (4x3 grid, skip row 2 col 4)
+    try {
+      const rockSheetLarge = await Assets.load('/rocks_large.png');
+      const frameWidth = rockSheetLarge.width / 4;
+      const frameHeight = rockSheetLarge.height / 3;
+
+      // Crop top portion to avoid bleeding from cell above (but not for top row)
+      const topCrop = frameHeight * 0.15; // Skip top 15% of each cell
+      const bottomExtend = 12; // Extend bottom 5 pixels for row 2
+
+      let loadedCount = 0;
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 4; col++) {
+          // Skip row 2, column 4 (1-indexed: row=2, col=4 -> 0-indexed: row=1, col=3)
+          if (row === 1 && col === 3) {
+            continue;
+          }
+          // Skip row 1, column 3 (1-indexed: row=1, col=3 -> 0-indexed: row=0, col=2)
+          if (row === 0 && col === 2) {
+            continue;
+          }
+
+          // Apply top crop only to rows below the first (to avoid bleed from above)
+          let cropAmount = row === 0 ? 0 : topCrop;
+          if (row === 2) cropAmount += 5;
+          // Extend row 2 (0-indexed row 1) slightly downward
+          const extendAmount = row === 1 ? bottomExtend : 0;
+          const rect = new Rectangle(
+            col * frameWidth,
+            row * frameHeight + cropAmount,
+            frameWidth,
+            frameHeight - cropAmount + extendAmount
+          );
+          const texture = new Texture({ source: rockSheetLarge.source, frame: rect });
+          rockSpritesLarge.push(texture);
+          loadedCount++;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load large rock sprite sheet:', err);
+    }
+
+    // Load medium rock sprite sheet (1x6 grid)
+    try {
+      const rockSheetMedium = await Assets.load('/rocks_medium.png');
+      const frameWidth = rockSheetMedium.width / 6;
+      const frameHeight = rockSheetMedium.height;
+
+      for (let col = 0; col < 6; col++) {
+        // Skip column 4 (1-indexed: col=4 -> 0-indexed: col=3)
+        if (col === 3) {
+          continue;
+        }
+
+        const rect = new Rectangle(col * frameWidth, 0, frameWidth, frameHeight);
+        const texture = new Texture({ source: rockSheetMedium.source, frame: rect });
+        rockSpritesMedium.push(texture);
+      }
+    } catch (err) {
+      console.error('Failed to load medium rock sprite sheet:', err);
+    }
+
+    // Load small rock sprite sheet (1x7 grid)
+    try {
+      const rockSheetSmall = await Assets.load('/rocks_small.png');
+      const frameWidth = rockSheetSmall.width / 7;
+      const frameHeight = rockSheetSmall.height;
+
+      for (let col = 0; col < 7; col++) {
+        const rect = new Rectangle(col * frameWidth, 0, frameWidth, frameHeight);
+        const texture = new Texture({ source: rockSheetSmall.source, frame: rect });
+        rockSpritesSmall.push(texture);
+      }
+    } catch (err) {
+      console.error('Failed to load small rock sprite sheet:', err);
+    }
+
     // Create world container with sorting enabled to prevent flickering
     this.worldContainer = new Container();
     this.worldContainer.sortableChildren = true; // Enable z-index sorting
+
+    // Disable culling to prevent sprites from being clipped
+    this.worldContainer.cullable = false;
+
+    // Set explicit bounds to prevent automatic clipping
+    this.worldContainer.boundsArea = new Rectangle(
+      -500, -500,
+      this.worldWidth + 1000,
+      this.worldHeight + 1000
+    );
+
     this.app.stage.addChild(this.worldContainer);
+
+    // Add solid green ground background (inset slightly to stay within border)
+    const groundGraphics = new Graphics();
+    const borderInset = 2; // Inset to stay within 4px border stroke
+    groundGraphics.rect(borderInset, borderInset, this.worldWidth - borderInset * 2, this.worldHeight - borderInset * 2);
+    groundGraphics.fill({ color: 0x5a9c3e }); // Muted green matching background
+    groundGraphics.zIndex = -1000; // Behind everything else
+    this.worldContainer.addChild(groundGraphics);
+
+    // Add ground clutter sprites scattered randomly (decorative shadows)
+    if (groundClutterTextures.length > 0) {
+      const clutterCount = 600; // Number of clutter sprites to scatter
+
+      for (let i = 0; i < clutterCount; i++) {
+        // Pick random clutter texture
+        const texture = groundClutterTextures[Math.floor(Math.random() * groundClutterTextures.length)];
+
+        // Random position across entire world
+        const x = Math.random() * this.worldWidth;
+        const y = Math.random() * this.worldHeight;
+
+        // Create sprite
+        const clutterSprite = new Sprite(texture);
+        clutterSprite.x = x;
+        clutterSprite.y = y;
+        clutterSprite.anchor.set(0.5);
+
+        // Random scale (larger for visibility)
+        const scale = 0.8 + Math.random() * 0.8; // 0.8 to 1.6x
+        clutterSprite.scale.set(scale);
+
+        // Random rotation
+        clutterSprite.rotation = Math.random() * Math.PI * 2;
+
+        // More visible alpha
+        clutterSprite.alpha = 0.5 + Math.random() * 0.3; // 0.5 to 0.8 alpha
+
+        // Behind most things but above ground
+        clutterSprite.zIndex = -900;
+
+        this.worldContainer.addChild(clutterSprite);
+      }
+
+      console.log(`Scattered ${clutterCount} ground clutter sprites (decorative, no collision)`);
+    } else {
+      console.warn('No ground clutter textures loaded! Check /public/1.png through 6.png');
+    }
 
     // Initialize camera
     this.camera = new Camera(this.worldContainer);
@@ -146,7 +355,27 @@ export class Game {
     // Initialize metrics
     this.metrics = new Metrics();
 
-    // Create colony at center with more initial ants
+    // Initialize obstacle manager with saved settings FIRST (so rocks exist before food/ants spawn)
+    const savedLargeCount = localStorage.getItem('rockSettings.largeCount');
+    const savedLargeSpread = localStorage.getItem('rockSettings.largeSpread');
+    const savedMediumCount = localStorage.getItem('rockSettings.mediumCount');
+    const savedMediumSpread = localStorage.getItem('rockSettings.mediumSpread');
+    const savedSmallCount = localStorage.getItem('rockSettings.smallCount');
+    const savedSmallSpread = localStorage.getItem('rockSettings.smallSpread');
+
+    this.obstacleManager = new ObstacleManager(
+      this.worldContainer,
+      this.worldWidth,
+      this.worldHeight,
+      savedLargeCount ? parseInt(savedLargeCount) : undefined,
+      savedMediumCount ? parseInt(savedMediumCount) : undefined,
+      savedSmallCount ? parseInt(savedSmallCount) : undefined,
+      savedLargeSpread ? parseFloat(savedLargeSpread) : undefined,
+      savedMediumSpread ? parseFloat(savedMediumSpread) : undefined,
+      savedSmallSpread ? parseFloat(savedSmallSpread) : undefined
+    );
+
+    // Create colony at center (but don't spawn ants yet)
     this.colony = new Colony(
       { x: this.worldWidth / 2, y: this.worldHeight / 2 },
       this.pheromoneGrid,
@@ -156,14 +385,6 @@ export class Game {
       this.metrics
     );
     this.worldContainer.addChild(this.colony.sprite);
-    this.colony.setWorldContainer(this.worldContainer);
-
-    // Initialize obstacle manager
-    this.obstacleManager = new ObstacleManager(
-      this.worldContainer,
-      this.worldWidth,
-      this.worldHeight
-    );
 
     // Initialize food manager (pass obstacles and pheromone grid for spawn avoidance)
     this.foodManager = new FoodManager(
@@ -171,8 +392,12 @@ export class Game {
       this.worldWidth,
       this.worldHeight,
       this.obstacleManager,
-      this.pheromoneGrid
+      this.pheromoneGrid,
+      () => this.colony.getAntCount()
     );
+
+    // Now spawn initial ants (after rocks and food are ready)
+    this.colony.setWorldContainer(this.worldContainer);
 
     // Draw world boundaries
     this.drawWorldBounds();
@@ -195,50 +420,258 @@ export class Game {
     const bounds = new Container();
     const graphics = new Graphics();
 
-    // Draw boundary rectangle
-    graphics.rect(0, 0, this.worldWidth, this.worldHeight);
+    // Draw boundary rectangle - just stroke, no fill to avoid clipping
+    graphics.rect(2, 2, this.worldWidth - 4, this.worldHeight - 4);
     graphics.stroke({ width: 4, color: 0x333333 });
 
     bounds.addChild(graphics);
+    bounds.zIndex = 10000; // Render on top of everything
     this.worldContainer.addChild(bounds);
   }
 
   private setupUIControls(): void {
-    // Pause button
+    const speedDisplay = document.getElementById('speedDisplay')!;
+
+    // Pause/Play button (starts playing, so show pause icon)
     const pauseBtn = document.getElementById('pauseBtn')!;
+    this.isPaused = false;
+    pauseBtn.textContent = '||'; // Show pause icon when playing
+
     pauseBtn.addEventListener('click', () => {
       this.isPaused = !this.isPaused;
-      pauseBtn.textContent = this.isPaused ? 'Resume' : 'Pause';
+      pauseBtn.textContent = this.isPaused ? '▶' : '||';
     });
 
-    // Speed button
-    const speedBtn = document.getElementById('speedBtn')!;
-    speedBtn.addEventListener('click', () => {
-      if (this.simulationSpeed === 1) {
+    // Slow down button
+    const slowBtn = document.getElementById('slowBtn')!;
+    slowBtn.addEventListener('click', () => {
+      if (this.simulationSpeed === 10) {
+        this.simulationSpeed = 4;
+      } else if (this.simulationSpeed === 4) {
+        this.simulationSpeed = 2;
+      } else if (this.simulationSpeed === 2) {
+        this.simulationSpeed = 1;
+      } else if (this.simulationSpeed === 1) {
+        this.simulationSpeed = 0.5;
+      }
+      speedDisplay.textContent = `${this.simulationSpeed}x`;
+    });
+
+    // Speed up button
+    const fastBtn = document.getElementById('fastBtn')!;
+    fastBtn.addEventListener('click', () => {
+      if (this.simulationSpeed === 0.5) {
+        this.simulationSpeed = 1;
+      } else if (this.simulationSpeed === 1) {
         this.simulationSpeed = 2;
       } else if (this.simulationSpeed === 2) {
         this.simulationSpeed = 4;
       } else if (this.simulationSpeed === 4) {
         this.simulationSpeed = 10;
-      } else {
-        this.simulationSpeed = 1;
       }
-      speedBtn.textContent = `Speed: ${this.simulationSpeed}x`;
+      speedDisplay.textContent = `${this.simulationSpeed}x`;
     });
 
-    // Scout trail toggle
-    const scoutTrailBtn = document.getElementById('scoutTrailBtn')!;
-    scoutTrailBtn.addEventListener('click', () => {
-      this.showScoutTrails = !this.showScoutTrails;
-      scoutTrailBtn.classList.toggle('active', this.showScoutTrails);
-    });
+    // Rock collider toggle (debug)
+    const rockColliderBtn = document.getElementById('rockColliderBtn');
+    if (rockColliderBtn) {
+      rockColliderBtn.addEventListener('click', () => {
+        this.showRockColliders = !this.showRockColliders;
+        rockColliderBtn.classList.toggle('active', this.showRockColliders);
+      });
+    }
 
-    // Forager trail toggle
-    const foragerTrailBtn = document.getElementById('foragerTrailBtn')!;
-    foragerTrailBtn.addEventListener('click', () => {
-      this.showForagerTrails = !this.showForagerTrails;
-      foragerTrailBtn.classList.toggle('active', this.showForagerTrails);
-    });
+    // Metrics panel toggle
+    const metricsBtn = document.getElementById('metricsBtn');
+    const metricsPanel = document.getElementById('metricsPanel');
+    if (metricsBtn && metricsPanel) {
+      metricsBtn.addEventListener('click', () => {
+        const isHidden = metricsPanel.style.display === 'none';
+        metricsPanel.style.display = isHidden ? 'block' : 'none';
+        metricsBtn.textContent = isHidden ? 'Hide Metrics' : 'Metrics';
+      });
+    }
+
+    // Debug panel toggle
+    const debugBtn = document.getElementById('debugBtn');
+    const debugPanel = document.getElementById('debugPanel');
+    const rockStats = document.getElementById('rockStats');
+    if (debugBtn && debugPanel) {
+      debugBtn.addEventListener('click', () => {
+        const isHidden = debugPanel.style.display === 'none' || debugPanel.style.display === '';
+        debugPanel.style.display = isHidden ? 'block' : 'none';
+        debugBtn.textContent = isHidden ? 'Hide Debug' : 'Debug';
+
+        // Toggle rock stats visibility with debug panel
+        if (rockStats) {
+          rockStats.style.display = isHidden ? 'block' : 'none';
+        }
+      });
+    }
+
+    // Rock distribution sliders
+    const largeRockSlider = document.getElementById('largeRockSlider') as HTMLInputElement;
+    const largeRockCount = document.getElementById('largeRockCount');
+    const largeSpreadSlider = document.getElementById('largeSpreadSlider') as HTMLInputElement;
+    const largeSpreadValue = document.getElementById('largeSpreadValue');
+
+    const mediumRockSlider = document.getElementById('mediumRockSlider') as HTMLInputElement;
+    const mediumRockCount = document.getElementById('mediumRockCount');
+    const mediumSpreadSlider = document.getElementById('mediumSpreadSlider') as HTMLInputElement;
+    const mediumSpreadValue = document.getElementById('mediumSpreadValue');
+
+    const smallRockSlider = document.getElementById('smallRockSlider') as HTMLInputElement;
+    const smallRockCount = document.getElementById('smallRockCount');
+    const smallSpreadSlider = document.getElementById('smallSpreadSlider') as HTMLInputElement;
+    const smallSpreadValue = document.getElementById('smallSpreadValue');
+
+    // Load saved rock settings from localStorage
+    const savedLargeCount = localStorage.getItem('rockSettings.largeCount');
+    const savedLargeSpread = localStorage.getItem('rockSettings.largeSpread');
+    const savedMediumCount = localStorage.getItem('rockSettings.mediumCount');
+    const savedMediumSpread = localStorage.getItem('rockSettings.mediumSpread');
+    const savedSmallCount = localStorage.getItem('rockSettings.smallCount');
+    const savedSmallSpread = localStorage.getItem('rockSettings.smallSpread');
+
+    if (savedLargeCount && largeRockSlider && largeRockCount) {
+      largeRockSlider.value = savedLargeCount;
+      largeRockCount.textContent = savedLargeCount;
+    }
+    if (savedLargeSpread && largeSpreadSlider && largeSpreadValue) {
+      largeSpreadSlider.value = savedLargeSpread;
+      largeSpreadValue.textContent = savedLargeSpread;
+    }
+    if (savedMediumCount && mediumRockSlider && mediumRockCount) {
+      mediumRockSlider.value = savedMediumCount;
+      mediumRockCount.textContent = savedMediumCount;
+    }
+    if (savedMediumSpread && mediumSpreadSlider && mediumSpreadValue) {
+      mediumSpreadSlider.value = savedMediumSpread;
+      mediumSpreadValue.textContent = savedMediumSpread;
+    }
+    if (savedSmallCount && smallRockSlider && smallRockCount) {
+      smallRockSlider.value = savedSmallCount;
+      smallRockCount.textContent = savedSmallCount;
+    }
+    if (savedSmallSpread && smallSpreadSlider && smallSpreadValue) {
+      smallSpreadSlider.value = savedSmallSpread;
+      smallSpreadValue.textContent = savedSmallSpread;
+    }
+
+    // Helper function to update rock stats display
+    const updateRockStats = () => {
+      const counts = this.obstacleManager.getRockCounts();
+      const largeRockStat = document.getElementById('largeRockStat');
+      const mediumRockStat = document.getElementById('mediumRockStat');
+      const smallRockStat = document.getElementById('smallRockStat');
+
+      if (largeRockStat) largeRockStat.textContent = counts.large.toString();
+      if (mediumRockStat) mediumRockStat.textContent = counts.medium.toString();
+      if (smallRockStat) smallRockStat.textContent = counts.small.toString();
+    };
+
+    // Helper function to respawn rocks
+    const respawnRocks = () => {
+      if (!largeRockSlider || !mediumRockSlider || !smallRockSlider) return;
+      if (!largeSpreadSlider || !mediumSpreadSlider || !smallSpreadSlider) return;
+
+      const largeCount = parseInt(largeRockSlider.value);
+      const mediumCount = parseInt(mediumRockSlider.value);
+      const smallCount = parseInt(smallRockSlider.value);
+      const largeSpread = parseFloat(largeSpreadSlider.value);
+      const mediumSpread = parseFloat(mediumSpreadSlider.value);
+      const smallSpread = parseFloat(smallSpreadSlider.value);
+
+      // Destroy old obstacles
+      this.obstacleManager.destroy();
+
+      // Create new obstacle manager with custom counts
+      this.obstacleManager = new ObstacleManager(
+        this.worldContainer,
+        this.worldWidth,
+        this.worldHeight,
+        largeCount,
+        mediumCount,
+        smallCount,
+        largeSpread,
+        mediumSpread,
+        smallSpread
+      );
+
+      // Update rock stats display
+      updateRockStats();
+    };
+
+    // Initial rock stats update
+    updateRockStats();
+
+    if (largeRockSlider && largeRockCount) {
+      largeRockSlider.addEventListener('input', () => {
+        largeRockCount.textContent = largeRockSlider.value;
+        localStorage.setItem('rockSettings.largeCount', largeRockSlider.value);
+        respawnRocks();
+      });
+      largeRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      largeRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    if (largeSpreadSlider && largeSpreadValue) {
+      largeSpreadSlider.addEventListener('input', () => {
+        largeSpreadValue.textContent = largeSpreadSlider.value;
+        localStorage.setItem('rockSettings.largeSpread', largeSpreadSlider.value);
+        respawnRocks();
+      });
+      largeSpreadSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      largeSpreadSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    if (mediumRockSlider && mediumRockCount) {
+      mediumRockSlider.addEventListener('input', () => {
+        mediumRockCount.textContent = mediumRockSlider.value;
+        localStorage.setItem('rockSettings.mediumCount', mediumRockSlider.value);
+        respawnRocks();
+      });
+      mediumRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      mediumRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    if (mediumSpreadSlider && mediumSpreadValue) {
+      mediumSpreadSlider.addEventListener('input', () => {
+        mediumSpreadValue.textContent = mediumSpreadSlider.value;
+        localStorage.setItem('rockSettings.mediumSpread', mediumSpreadSlider.value);
+        respawnRocks();
+      });
+      mediumSpreadSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      mediumSpreadSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    if (smallRockSlider && smallRockCount) {
+      smallRockSlider.addEventListener('input', () => {
+        smallRockCount.textContent = smallRockSlider.value;
+        localStorage.setItem('rockSettings.smallCount', smallRockSlider.value);
+        respawnRocks();
+      });
+      smallRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      smallRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    if (smallSpreadSlider && smallSpreadValue) {
+      smallSpreadSlider.addEventListener('input', () => {
+        smallSpreadValue.textContent = smallSpreadSlider.value;
+        localStorage.setItem('rockSettings.smallSpread', smallSpreadSlider.value);
+        respawnRocks();
+      });
+      smallSpreadSlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      smallSpreadSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    }
+
+    // Respawn rocks button (now just triggers the same function)
+    const respawnRocksBtn = document.getElementById('respawnRocksBtn');
+    if (respawnRocksBtn) {
+      respawnRocksBtn.addEventListener('click', () => {
+        respawnRocks();
+      });
+    }
   }
 
   private gameLoop(deltaTime: number): void {
@@ -251,10 +684,13 @@ export class Game {
 
     // Update pheromone grid
     this.pheromoneGrid.update();
-    this.pheromoneGrid.render(this.showScoutTrails, this.showForagerTrails);
+    this.pheromoneGrid.render(true, true);
 
     // Update food manager
     this.foodManager.update(adjustedDelta);
+
+    // Render obstacle colliders if debug enabled
+    this.obstacleManager.renderDebug(this.showRockColliders);
 
     // Update colony (pass food sources and obstacles for sensing)
     this.colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager);
@@ -285,7 +721,7 @@ export class Game {
   private updateUI(): void {
     this.antCountEl.textContent = this.colony.getAntCount().toString();
     this.foodCountEl.textContent = Math.floor(this.colony.foodStored).toString();
-    this.spawnProgressEl.textContent = `${Math.round(this.colony.foodSinceLastSpawn * 10) / 10}/10`;
+    this.spawnProgressEl.textContent = `${Math.round(this.colony.foodStored * 10) / 10}/${CONFIG.FOOD_COST_TO_SPAWN}`;
     this.generationEl.textContent = this.colony.generation.toString();
     this.fpsEl.textContent = Math.round(this.app.ticker.FPS).toString();
 

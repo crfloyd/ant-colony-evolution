@@ -10,28 +10,109 @@
     <div id="app">
       <canvas id="gameCanvas"></canvas>
       <div id="ui">
-        <div class="stats-panel">
-          <h2>Colony Stats</h2>
-          <div class="stat"><span class="label">Ants:</span> <span id="antCount">0</span></div>
-          <div class="stat"><span class="label">Food:</span> <span id="foodCount">0</span></div>
-          <div class="stat"><span class="label">Next Spawn:</span> <span id="spawnProgress">0/10</span></div>
-          <div class="stat"><span class="label">Generation:</span> <span id="generation">1</span></div>
-          <div class="stat"><span class="label">FPS:</span> <span id="fps">60</span></div>
+        <!-- Top Stats Bar -->
+        <div class="stats-bar">
+          <div class="stat-item">
+            <span class="stat-label">Ants</span>
+            <span class="stat-value" id="antCount">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Food</span>
+            <span class="stat-value" id="foodCount">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Next Spawn</span>
+            <span class="stat-value" id="spawnProgress">0/10</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Gen</span>
+            <span class="stat-value" id="generation">1</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">FPS</span>
+            <span class="stat-value" id="fps">60</span>
+          </div>
         </div>
-        <div class="controls">
-          <button id="pauseBtn">Pause</button>
-          <button id="speedBtn">Speed: 1x</button>
-          <button id="scoutTrailBtn" class="active">Scout Trails</button>
-          <button id="foragerTrailBtn" class="active">Forager Trails</button>
+
+        <!-- Playback Controls (Media Player Style) -->
+        <div class="playback-controls">
+          <button id="slowBtn" class="control-btn" title="Slow Down">&lt;&lt;</button>
+          <button id="pauseBtn" class="control-btn primary" title="Play/Pause">▶</button>
+          <button id="fastBtn" class="control-btn" title="Speed Up">&gt;&gt;</button>
+          <span class="speed-display" id="speedDisplay">1x</span>
+        </div>
+
+        <!-- Utility Controls -->
+        <div class="utility-controls">
+          <button id="metricsBtn" class="util-btn">📊 Metrics</button>
+          <button id="rockColliderBtn" class="util-btn">🎯 Colliders</button>
+          <button id="debugBtn" class="util-btn">🔧 Debug</button>
+        </div>
+
+        <!-- Rock Stats (shown only when debug panel is open) -->
+        <div id="rockStats" style="display: none;">
+          <div class="rock-stat">
+            <span class="rock-label">Large:</span>
+            <span class="rock-value" id="largeRockStat">0</span>
+          </div>
+          <div class="rock-stat">
+            <span class="rock-label">Medium:</span>
+            <span class="rock-value" id="mediumRockStat">0</span>
+          </div>
+          <div class="rock-stat">
+            <span class="rock-label">Small:</span>
+            <span class="rock-value" id="smallRockStat">0</span>
+          </div>
         </div>
       </div>
-      <div id="metricsPanel">
+      <div id="metricsPanel" style="display: none;">
         <h3>Colony Metrics</h3>
         <div class="metric"><span class="label">Trips/Hour:</span> <span id="tripsPerHour">0</span></div>
         <div class="metric"><span class="label">Avg Trip Dist:</span> <span id="avgTripDist">0</span></div>
         <div class="metric"><span class="label">Foraging:</span> <span id="foragingPct">0%</span></div>
         <div class="metric"><span class="label">Returning:</span> <span id="returningPct">0%</span></div>
         <div class="metric"><span class="label">Food/Min:</span> <span id="foodPerMin">0</span></div>
+      </div>
+      <div id="debugPanel" style="display: none;">
+        <h3>Rock Distribution</h3>
+
+        <div class="debug-section">
+          <h4>Large Rocks</h4>
+          <div class="debug-control">
+            <label>Count: <span id="largeRockCount">39</span></label>
+            <input type="range" id="largeRockSlider" min="0" max="100" value="39">
+          </div>
+          <div class="debug-control">
+            <label>Spread: <span id="largeSpreadValue">0.8</span></label>
+            <input type="range" id="largeSpreadSlider" min="0.5" max="2.0" step="0.1" value="0.8">
+          </div>
+        </div>
+
+        <div class="debug-section">
+          <h4>Medium Rocks</h4>
+          <div class="debug-control">
+            <label>Count: <span id="mediumRockCount">56</span></label>
+            <input type="range" id="mediumRockSlider" min="0" max="100" value="56">
+          </div>
+          <div class="debug-control">
+            <label>Spread: <span id="mediumSpreadValue">0.7</span></label>
+            <input type="range" id="mediumSpreadSlider" min="0.5" max="2.0" step="0.1" value="0.7">
+          </div>
+        </div>
+
+        <div class="debug-section">
+          <h4>Small Rocks</h4>
+          <div class="debug-control">
+            <label>Count: <span id="smallRockCount">134</span></label>
+            <input type="range" id="smallRockSlider" min="0" max="200" value="134">
+          </div>
+          <div class="debug-control">
+            <label>Spread: <span id="smallSpreadValue">0.7</span></label>
+            <input type="range" id="smallSpreadSlider" min="0.5" max="2.0" step="0.1" value="0.7">
+          </div>
+        </div>
+
+        <button id="respawnRocksBtn">Respawn Rocks</button>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

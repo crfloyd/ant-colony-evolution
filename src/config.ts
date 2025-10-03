@@ -8,26 +8,23 @@ export const WORLD_HEIGHT = 8000;
 export const INITIAL_ANT_COUNT = 500; // Start small, let population grow naturally
 export const MAX_ANT_COUNT = 5000;
 export const COLONY_STARTING_FOOD = 100; // Increased to support initial spawning
-export const COLONY_RETURN_RADIUS = 300; // Distance within which ant can deliver food
-export const COLONY_OUTER_RADIUS = 280; // Visual size of colony nest (outer circle)
-export const COLONY_MIDDLE_RADIUS = 180; // Visual size of colony nest (middle circle)
-export const COLONY_ENTRANCE_RADIUS = 90; // Visual size of colony entrance
+export const COLONY_RETURN_RADIUS = 440; // Distance within which ant can deliver food
+export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
 export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive generation culling
 
 // Spawning Settings
-export const FOOD_TO_SPAWN_ANT = 10;
 export const FOOD_COST_TO_SPAWN = 10;
 
 // Food Settings
-export const INITIAL_FOOD_SOURCES = 50;
+export const INITIAL_FOOD_SOURCES = 10;
 export const MIN_FOOD_PER_SOURCE = 50;
 export const MAX_FOOD_PER_SOURCE = 100;
-export const FOOD_RESPAWN_INTERVAL = 50; // frames - faster respawn for equilibrium
-export const MAX_FOOD_SOURCES = 100; // More food sources to support population
+export const FOOD_RESPAWN_INTERVAL = 200; // frames - slower respawn
+export const MAX_FOOD_SOURCES = 50; // More food sources to support population
 export const FOOD_MIN_DIST_FROM_COLONY = 150; // Minimum spawn distance from colony
 export const FOOD_PHER_AVOIDANCE_THRESHOLD = 15.0; // Only avoid VERY high foodPher areas
 export const FOOD_SPAWN_MARGIN = 50; // Keep food away from world edges
-export const FOOD_SPAWN_OBSTACLE_CHECK_RADIUS = 30; // Radius for obstacle collision check
+export const FOOD_SPAWN_OBSTACLE_CHECK_RADIUS = 80; // Radius for obstacle collision check (larger than max food radius to prevent overlap)
 export const FOOD_MIN_RADIUS = 15; // Minimum visual radius for food piles (3x larger)
 export const FOOD_MAX_RADIUS = 75; // Maximum visual radius for food piles (3x larger)
 export const FOOD_PICKUP_RADIUS = 20; // Default collision detection radius for food pickup
@@ -77,13 +74,12 @@ export const ANT_STUCK_BACKUP_DISTANCE = 10; // Distance to backup when stuck
 export const ANT_WORLD_BOUNDARY_MARGIN = 50; // Margin from world edges
 export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy drains
 export const ANT_EXPECTED_MOVEMENT_RATIO = 0.3; // Minimum expected movement for stuck detection
-export const ANT_COLONY_PUSH_DISTANCE = 60; // Push distance after returning to colony
 export const ANT_JUST_RETURNED_COOLDOWN = 5; // Frames of free movement after returning (short to prevent clumping)
-export const PHYS_MAX_SWEEP_ITERS = 5;
-export const PHYS_EPS = 1e-5;             // numeric slop
-export const PHYS_SKIN = 0.01;            // small push-out after contact (in world units)
-export const PHYS_MIN_SPEED = 1e-3;       // ignore near-zero velocities
-export const PHYS_SUBSTEP_MAX_DIST = 200; // optional: cap per-step travel (pre-substep)
+export const PHYS_MAX_SWEEP_ITERS = 3;
+export const PHYS_EPS = 0.001;             // numeric slop
+export const PHYS_SKIN = 2.0;              // push-out after contact (increased to prevent sticking)
+export const PHYS_MIN_SPEED = 0.01;        // ignore near-zero velocities
+export const PHYS_SUBSTEP_MAX_DIST = 100;  // cap per-step travel (smaller for better collision)
 
 // Ant behavior - wall avoidance
 export const ANT_WALL_AVOIDANCE_BLEND_AWAY = 0.7; // Weight for turning away from wall
@@ -174,7 +170,7 @@ export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning
 
 // Camera Settings
 export const CAMERA_START_ZOOM = 0.5;
-export const CAMERA_MIN_ZOOM = 0.125;
+export const CAMERA_MIN_ZOOM = 0.05;
 export const CAMERA_MAX_ZOOM = 3;
 export const CAMERA_MOVE_SPEED = 5;
 export const CAMERA_ZOOM_OUT_FACTOR = 0.95; // Mouse wheel zoom out per tick

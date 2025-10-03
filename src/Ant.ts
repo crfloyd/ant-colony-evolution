@@ -2,7 +2,7 @@ import { Graphics, Container, AnimatedSprite, Sprite } from 'pixi.js';
 import { Entity, Vector2, AntRole, AntState } from './types';
 import { PheromoneGrid } from './PheromoneGrid';
 import * as CONFIG from './config';
-import { antSpriteTextures } from './Game';
+import { antSpriteTextures, scoutSpriteTextures } from './Game';
 
 /** Data structure for FOV ray results (Phase 2 Task 6) */
 interface RayResult {
@@ -36,11 +36,14 @@ export class Ant implements Entity {
   private graphics: Graphics | null = null;
   private animatedSprite: AnimatedSprite | null = null;
   private currentSpriteRotation: number = 0; // Smooth rotation tracking
+  private foodGraphics: Graphics | null = null; // Tiny food piece when carrying
   private colony: Vector2;
   private maxSpeed: number = 3;
   private pheromoneGrid: PheromoneGrid;
   private isDead: boolean = false;
-  private stuckCounter: number = 0;
+    private wallFollowUntil: number = 0;
+  private lastCollisionN: Vector2 | null = null;
+private stuckCounter: number = 0;
   private lastPosition: Vector2 = { x: 0, y: 0 };
   private justReturnedTimer: number = 0; // Cooldown after returning food
   private worldWidth: number = 8000;
@@ -93,13 +96,16 @@ export class Ant implements Entity {
     // Create sprite - use animated sprite if textures loaded, otherwise graphics fallback
     this.sprite = new Container();
 
-    if (antSpriteTextures && antSpriteTextures.length > 0) {
+    // Choose sprite sheet based on role
+    const spriteTextures = (role === AntRole.SCOUT && scoutSpriteTextures) ? scoutSpriteTextures : antSpriteTextures;
+
+    if (spriteTextures && spriteTextures.length > 0) {
       // Use animated sprite
-      this.animatedSprite = new AnimatedSprite(antSpriteTextures);
+      this.animatedSprite = new AnimatedSprite(spriteTextures);
       this.animatedSprite.animationSpeed = 0.1; // Slow animation speed
 
       // Randomize starting frame to desynchronize animations
-      this.animatedSprite.currentFrame = Math.floor(Math.random() * antSpriteTextures.length);
+      this.animatedSprite.currentFrame = Math.floor(Math.random() * spriteTextures.length);
 
       this.animatedSprite.play();
       this.animatedSprite.anchor.set(0.5); // Center the sprite
@@ -109,6 +115,10 @@ export class Ant implements Entity {
       this.sprite.zIndex = position.y;
 
       this.sprite.addChild(this.animatedSprite);
+
+      // Create food graphics for when carrying
+      this.foodGraphics = new Graphics();
+      this.sprite.addChild(this.foodGraphics);
     } else {
       // Fallback to graphics rendering
       this.graphics = new Graphics();
@@ -130,29 +140,15 @@ export class Ant implements Entity {
   }
 
   private renderAnt(): void {
-    // Color based on role and state
+    // Color based on role (food shown as separate piece when carrying)
     let color: number;
-    if (this.state === AntState.RETURNING) {
-      color = 0xffff00; // Yellow if carrying food
-    } else if (this.role === AntRole.SCOUT) {
-      color = 0x00ddff; // Cyan for scouts
+    if (this.role === AntRole.SCOUT) {
+      color = 0xff6666; // Reddish for scouts
     } else {
       color = 0xff6644; // Orange-red for foragers
     }
 
     if (this.animatedSprite) {
-      // Brighten the sprite with a light tint
-      // Use lighter colors to make ants more visible
-      let brightColor: number;
-      if (this.state === AntState.RETURNING) {
-        brightColor = 0xffffaa; // Light yellow when carrying food
-      } else if (this.role === AntRole.SCOUT) {
-        brightColor = 0xaaffff; // Light cyan for scouts
-      } else {
-        brightColor = 0xffccaa; // Light orange for foragers
-      }
-      this.animatedSprite.tint = brightColor;
-
       // Smoothly rotate sprite to match velocity direction
       // Add π/2 offset because sprite faces upward by default
       const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
@@ -169,6 +165,16 @@ export class Ant implements Entity {
         this.currentSpriteRotation += diff * 0.2;
         this.animatedSprite.rotation = this.currentSpriteRotation;
       }
+
+      // Draw tiny food piece when carrying
+      if (this.foodGraphics) {
+        this.foodGraphics.clear();
+        if (this.state === AntState.RETURNING && this.carryingAmount > 0) {
+          // Small brown circle on the ant's back
+          this.foodGraphics.circle(0, -8, 4); // Position above center
+          this.foodGraphics.fill({ color: 0x8B4513, alpha: 0.9 }); // Brown food
+        }
+      }
     } else if (this.graphics) {
       // Fallback graphics rendering
       this.graphics.clear();
@@ -184,10 +190,10 @@ export class Ant implements Entity {
       this.graphics.circle(0, 0, size * 0.6);
       this.graphics.fill({ color: 0x000000, alpha: 0.3 });
 
-      // If carrying food, draw a small yellow dot
-      if (this.state === AntState.RETURNING) {
-        this.graphics.circle(0, 0, size * 0.4);
-        this.graphics.fill(0xffdd00);
+      // If carrying food, draw a small brown dot
+      if (this.state === AntState.RETURNING && this.carryingAmount > 0) {
+        this.graphics.circle(0, -size * 0.6, size * 0.5); // Position above center
+        this.graphics.fill({ color: 0x8B4513, alpha: 0.9 }); // Brown food
       }
 
       // Indicate direction with a small line (only if moving significantly)
@@ -553,7 +559,7 @@ export class Ant implements Entity {
   }
 
   /**
-   * Swept circle vs AABB collision with sliding (proper physics)
+   * Swept circle vs circle collision with sliding (for rock obstacles)
    */
   private sweepAndSlide(dt: number, obstacleManager: any): void {
     let remaining = 1.0;                       // normalized time in [0,1] for this frame
@@ -571,6 +577,23 @@ export class Ant implements Entity {
       remaining = 1.0;
       iter = 0;
 
+      // Depenetrate from circular obstacles
+      for (const w of walls) {
+        const dx = this.position.x - w.position.x;
+        const dy = this.position.y - w.position.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = r + w.radius;
+
+        if (dist < minDist && dist > 0.001) {
+          // Push out
+          const overlap = minDist - dist;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          this.position.x += nx * (overlap + CONFIG.PHYS_SKIN);
+          this.position.y += ny * (overlap + CONFIG.PHYS_SKIN);
+        }
+      }
+
       while (remaining > CONFIG.PHYS_EPS && iter++ < CONFIG.PHYS_MAX_SWEEP_ITERS) {
         const dx = this.velocity.x * subDt * remaining;
         const dy = this.velocity.y * subDt * remaining;
@@ -578,74 +601,115 @@ export class Ant implements Entity {
           break;
         }
 
-        // Broad: earliest hit among all walls
-        let bestT = 1.0, bestN = { x:0, y:0 }, bestWall: any = null, cornerHit = false;
+        // Find earliest circle-circle collision
+        let bestT = 1.0;
+        let bestN = { x: 0, y: 0 };
+        let bestWall: any = null;
 
         for (const w of walls) {
-          // If already inside (due to previous frame), push out once and continue
-          this.depenetrateIfInside(w, r);
+          // Swept circle vs circle collision
+          const hit = this.sweepCircleVsCircle(this.position.x, this.position.y, r, dx, dy, w.position.x, w.position.y, w.radius);
 
-          const ex = this.expandAABBByRadius(w, r);
-          const hit = this.raycastExpandedAABB(this.position.x, this.position.y, dx, dy, ex);
-          if (!hit.hit) continue;
-
-          if (hit.t < bestT) {
+          if (hit.hit && hit.t < bestT) {
             bestT = hit.t;
             bestN = { x: hit.nx, y: hit.ny };
             bestWall = w;
-            cornerHit = hit.corner;
           }
         }
 
         if (!bestWall) {
-          // No hit → free move for all remaining time
+          // No hit → free move
           this.position.x += dx;
           this.position.y += dy;
           break;
         }
 
-        // Move to impact, leaving a tiny skin to avoid re-penetration
+        // Move to impact
         const tMove = Math.max(0, bestT - CONFIG.PHYS_EPS);
         this.position.x += dx * tMove;
         this.position.y += dy * tMove;
 
-        // If corner, compute the correct corner normal from the **original box**
-        if (cornerHit) {
-          const impactX = this.position.x;
-          const impactY = this.position.y;
-          const p = this.closestPointOnRect(impactX, impactY, bestWall); // closest on original (unexpanded) rect
-          let nx = impactX - p.x;
-          let ny = impactY - p.y;
-          const len = Math.hypot(nx, ny);
-          if (len > CONFIG.PHYS_EPS) {
-            bestN.x = nx / len;
-            bestN.y = ny / len;
-          } else {
-            // Degenerate: fall back to face guess aligned with larger |dx|/|dy|
-            if (Math.abs(dx) > Math.abs(dy)) { bestN = {x: dx > 0 ? -1 : 1, y: 0}; }
-            else                              { bestN = {x: 0, y: dy > 0 ? -1 : 1}; }
-          }
-        }
-
-        // Push out by skin along the contact normal
+        // Push out by skin
         this.position.x += bestN.x * CONFIG.PHYS_SKIN;
         this.position.y += bestN.y * CONFIG.PHYS_SKIN;
+
+        // Remember collision normal
+        this.lastCollisionN = { x: bestN.x, y: bestN.y };
+        this.wallFollowUntil = CONFIG.TRAIL_LATCH_TIME;
 
         // Slide: remove normal component from velocity
         const vDotN = this.velocity.x * bestN.x + this.velocity.y * bestN.y;
         if (vDotN < 0) {
           this.velocity.x -= vDotN * bestN.x;
           this.velocity.y -= vDotN * bestN.y;
-          // Don't snap rotation - let it lerp smoothly in renderAnt()
         }
 
-        // Consume the time we actually advanced
+        // Consume time
         const consumed = tMove;
         remaining *= (1 - consumed);
-        // Prevent tiny infinite loops
         if (remaining < CONFIG.PHYS_EPS) break;
       }
     }
+  }
+
+  /**
+   * Swept circle vs circle collision
+   * Returns earliest time of impact (t) and contact normal (nx, ny)
+   */
+  private sweepCircleVsCircle(
+    x: number, y: number, r1: number,
+    dx: number, dy: number,
+    ox: number, oy: number, r2: number
+  ): { hit: boolean; t: number; nx: number; ny: number } {
+    // Treat as ray vs circle problem
+    // Moving circle center: (x, y) moving by (dx, dy)
+    // Static circle: (ox, oy) with combined radius R = r1 + r2
+
+    const R = r1 + r2;
+    const px = x - ox;  // Relative position
+    const py = y - oy;
+
+    // Quadratic: ||p + t*d||^2 = R^2
+    // (px + t*dx)^2 + (py + t*dy)^2 = R^2
+    // Expand: px^2 + 2*px*dx*t + dx^2*t^2 + py^2 + 2*py*dy*t + dy^2*t^2 = R^2
+    // (dx^2 + dy^2)*t^2 + 2*(px*dx + py*dy)*t + (px^2 + py^2 - R^2) = 0
+
+    const a = dx * dx + dy * dy;
+    const b = 2 * (px * dx + py * dy);
+    const c = px * px + py * py - R * R;
+
+    if (a < 1e-9) {
+      // Not moving, check if already overlapping
+      return { hit: false, t: 1, nx: 0, ny: 0 };
+    }
+
+    const discriminant = b * b - 4 * a * c;
+
+    if (discriminant < 0) {
+      // No collision
+      return { hit: false, t: 1, nx: 0, ny: 0 };
+    }
+
+    const sqrtDisc = Math.sqrt(discriminant);
+    const t1 = (-b - sqrtDisc) / (2 * a);
+    const t2 = (-b + sqrtDisc) / (2 * a);
+
+    // We want the first positive hit in range [0, 1]
+    let t = t1;
+    if (t < 0 || t > 1) {
+      t = t2;
+      if (t < 0 || t > 1) {
+        return { hit: false, t: 1, nx: 0, ny: 0 };
+      }
+    }
+
+    // Compute contact point and normal
+    const impactX = x + dx * t;
+    const impactY = y + dy * t;
+    const nx = (impactX - ox) / R;
+    const ny = (impactY - oy) / R;
+
+    return { hit: true, t, nx, ny };
   }
 
   private steerToward(dir: Vector2, dt: number) {
@@ -734,6 +798,9 @@ export class Ant implements Entity {
 
   /** FORAGING behavior (Task 8) with hysteresis */
   private updateForagingBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // Decay wall-glide timer each tick
+    if (this.wallFollowUntil > 0) this.wallFollowUntil -= deltaTime;
+
     // Update cooldown timer
     if (this.trailEndCooldown > 0) {
       this.trailEndCooldown -= deltaTime;
@@ -1136,13 +1203,13 @@ export class Ant implements Entity {
 
       // Push ant away from colony slightly to prevent clustering
       if (dist > 0) {
-        const pushDist = CONFIG.ANT_COLONY_PUSH_DISTANCE;
-        this.position.x = this.colony.x + (dx / dist) * pushDist;
-        this.position.y = this.colony.y + (dy / dist) * pushDist;
+        // Direction away from colony (normalized)
+        const dirX = dx / dist;
+        const dirY = dy / dist;
 
-        // Give it outward velocity
-        this.velocity.x = (dx / dist) * this.maxSpeed;
-        this.velocity.y = (dy / dist) * this.maxSpeed;
+        // Give ant outward velocity to move away
+        this.velocity.x = dirX * this.maxSpeed;
+        this.velocity.y = dirY * this.maxSpeed;
 
         // Set cooldown so ant keeps moving away before other behaviors interfere
         this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;

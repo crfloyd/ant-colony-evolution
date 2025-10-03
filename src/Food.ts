@@ -80,13 +80,15 @@ export class FoodManager {
   private worldHeight: number;
   private obstacleManager: any = null;
   private pheromoneGrid: any = null; // Phase 3 Task 15: Trail avoidance for food spawning
+  private getColonySize: () => number;
 
-  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any, pheromoneGrid?: any) {
+  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any, pheromoneGrid?: any, getColonySize?: () => number) {
     this.container = container;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.obstacleManager = obstacleManager;
     this.pheromoneGrid = pheromoneGrid;
+    this.getColonySize = getColonySize || (() => 0);
 
     // Spawn initial food sources
     this.spawnInitialFood(CONFIG.INITIAL_FOOD_SOURCES);
@@ -120,6 +122,19 @@ export class FoodManager {
       // Check if position is valid
       const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, CONFIG.FOOD_SPAWN_OBSTACLE_CHECK_RADIUS);
 
+      // Check distance from other food sources
+      let tooCloseToFood = false;
+      const minFoodDistance = 300; // Minimum distance between food sources
+      for (const food of this.foodSources) {
+        const fdx = position.x - food.position.x;
+        const fdy = position.y - food.position.y;
+        const foodDist = Math.sqrt(fdx * fdx + fdy * fdy);
+        if (foodDist < minFoodDistance) {
+          tooCloseToFood = true;
+          break;
+        }
+      }
+
       // Phase 3 Task 15: Check foodPher level at this position (only avoid VERY high areas)
       let veryHighPheromone = false;
       if (this.pheromoneGrid) {
@@ -127,24 +142,24 @@ export class FoodManager {
         veryHighPheromone = foodPher > CONFIG.FOOD_PHER_AVOIDANCE_THRESHOLD;
       }
 
-      // Valid if: far enough from colony, not in obstacle, not in super high pheromone area
+      // Valid if: far enough from colony, not in obstacle, not near other food, not in super high pheromone area
       const validDistance = distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY;
 
-      if (validDistance && !inObstacle && !veryHighPheromone) {
+      if (validDistance && !inObstacle && !tooCloseToFood && !veryHighPheromone) {
         break;
       }
 
       attempts++;
       if (attempts > CONFIG.FOOD_SPAWN_MAX_ATTEMPTS_STRICT) {
-        // After many attempts, relax pheromone constraint (but still avoid obstacles and colony)
-        if (!inObstacle && distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY) {
+        // After many attempts, relax pheromone constraint (but still avoid obstacles, colony, and other food)
+        if (!inObstacle && distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY && !tooCloseToFood) {
           break;
         }
       }
 
       if (attempts > CONFIG.FOOD_SPAWN_MAX_ATTEMPTS_TOTAL) {
-        // Give up entirely - just avoid obstacles
-        if (!inObstacle) {
+        // Give up entirely - just avoid obstacles and other food
+        if (!inObstacle && !tooCloseToFood) {
           break;
         }
       }
@@ -169,7 +184,15 @@ export class FoodManager {
     this.respawnTimer += deltaTime;
     if (this.respawnTimer >= CONFIG.FOOD_RESPAWN_INTERVAL) {
       this.respawnTimer = 0;
-      if (this.foodSources.length < CONFIG.MAX_FOOD_SOURCES) {
+
+      // Calculate max food sources based on colony size (1 food source per 10 ants)
+      const colonySize = this.getColonySize();
+      const dynamicMaxFood = Math.min(
+        Math.max(CONFIG.INITIAL_FOOD_SOURCES, Math.floor(colonySize / 10)),
+        CONFIG.MAX_FOOD_SOURCES
+      );
+
+      if (this.foodSources.length < dynamicMaxFood) {
         this.spawnFood();
       }
     }

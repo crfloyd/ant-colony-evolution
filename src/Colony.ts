@@ -1,8 +1,9 @@
-import { Graphics, Container } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
 import { Entity, Vector2, AntRole } from './types';
 import { Ant } from './Ant';
 import { PheromoneGrid } from './PheromoneGrid';
 import { Metrics } from './Metrics';
+import { colonyMoundTexture } from './Game';
 import * as CONFIG from './config';
 
 export class Colony implements Entity {
@@ -11,9 +12,8 @@ export class Colony implements Entity {
   public foodStored: number = CONFIG.COLONY_STARTING_FOOD;
   public ants: Ant[] = [];
   public generation: number = 1;
-  public foodSinceLastSpawn: number = 0; // Track food collected for spawning
 
-  private graphics: Graphics;
+  private moundSprite: Sprite | null = null;
   private pheromoneGrid: PheromoneGrid;
   private worldContainer: Container | null = null;
   private worldWidth: number = 8000;
@@ -29,10 +29,17 @@ export class Colony implements Entity {
 
     // Create sprite
     this.sprite = new Container();
-    this.graphics = new Graphics();
-    this.sprite.addChild(this.graphics);
-    this.renderColony();
 
+    // Use the mound sprite
+    this.moundSprite = new Sprite(colonyMoundTexture);
+    this.moundSprite.anchor.set(0.5); // Center the sprite
+
+    // Scale to match CONFIG.COLONY_OUTER_RADIUS (mound diameter = 2 * radius)
+    const desiredSize = CONFIG.COLONY_OUTER_RADIUS * 2;
+    const scale = desiredSize / Math.max(colonyMoundTexture.width, colonyMoundTexture.height);
+    this.moundSprite.scale.set(scale);
+
+    this.sprite.addChild(this.moundSprite);
     this.sprite.x = position.x;
     this.sprite.y = position.y;
 
@@ -49,64 +56,6 @@ export class Colony implements Entity {
     for (let i = 0; i < this.initialAnts; i++) {
       this.spawnAnt();
     }
-  }
-
-  private renderColony(): void {
-    this.graphics.clear();
-
-    // Draw ant mound with gray/red soil appearance (distinct from brown food)
-    const outerRadius = CONFIG.COLONY_OUTER_RADIUS;
-    const midRadius = CONFIG.COLONY_MIDDLE_RADIUS;
-    const innerRadius = CONFIG.COLONY_ENTRANCE_RADIUS;
-
-    // Base mound (irregular shape using multiple overlapping circles for texture)
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      const offset = outerRadius * 0.15;
-      const x = Math.cos(angle) * offset;
-      const y = Math.sin(angle) * offset;
-      this.graphics.circle(x, y, outerRadius * 0.9);
-      this.graphics.fill({ color: 0xA0826D, alpha: 0.3 }); // Light grayish-brown
-    }
-
-    // Main mound body - reddish clay/soil
-    this.graphics.circle(0, 0, outerRadius);
-    this.graphics.fill({ color: 0xC04000, alpha: 0.95 }); // Burnt orange/red clay
-
-    // Mid layer - darker red clay
-    this.graphics.circle(0, 0, midRadius);
-    this.graphics.fill({ color: 0xA03000, alpha: 0.9 }); // Dark red clay
-
-    // Add some texture spots (small dirt/pebble patches)
-    for (let i = 0; i < 12; i++) {
-      const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.3;
-      const dist = midRadius * 0.5 + Math.random() * midRadius * 0.4;
-      const x = Math.cos(angle) * dist;
-      const y = Math.sin(angle) * dist;
-      const size = 3 + Math.random() * 4;
-      this.graphics.circle(x, y, size);
-      this.graphics.fill({ color: 0x8B7355, alpha: 0.7 }); // Grayish soil spots
-    }
-
-    // Entrance holes (multiple tunnels)
-    const entrances = [
-      { x: 0, y: 0, r: innerRadius },
-      { x: innerRadius * 0.8, y: innerRadius * 0.5, r: innerRadius * 0.6 },
-      { x: -innerRadius * 0.7, y: innerRadius * 0.6, r: innerRadius * 0.5 },
-    ];
-
-    for (const entrance of entrances) {
-      // Dark entrance with rim
-      this.graphics.circle(entrance.x, entrance.y, entrance.r * 1.2);
-      this.graphics.fill({ color: 0x602010, alpha: 0.9 }); // Dark reddish rim
-
-      this.graphics.circle(entrance.x, entrance.y, entrance.r);
-      this.graphics.fill({ color: 0x000000, alpha: 0.95 }); // Black hole
-    }
-
-    // Add highlight for 3D effect - lighter orange
-    this.graphics.circle(-outerRadius * 0.3, -outerRadius * 0.3, outerRadius * 0.3);
-    this.graphics.fill({ color: 0xFF6B35, alpha: 0.3 }); // Bright orange highlight
   }
 
   private spawnAnt(role?: AntRole): void {
@@ -132,12 +81,9 @@ export class Colony implements Entity {
   }
 
   public update(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
-    // Spawn new ant when enough food collected
-    if (this.foodSinceLastSpawn >= CONFIG.FOOD_TO_SPAWN_ANT && this.foodStored >= CONFIG.FOOD_COST_TO_SPAWN) {
-      this.foodSinceLastSpawn = 0;
-      this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN; // Spawning costs food
-
-      // Spawn new ant (role determined by SCOUT_SPAWN_RATIO)
+    // Spawn new ant when enough food stored
+    if (this.foodStored >= CONFIG.FOOD_COST_TO_SPAWN) {
+      this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN;
       this.spawnAnt();
     }
 
@@ -157,7 +103,6 @@ export class Colony implements Entity {
       const deliveredAmount = ant.checkColonyReturn(CONFIG.COLONY_RETURN_RADIUS);
       if (deliveredAmount > 0) {
         this.foodStored += deliveredAmount;
-        this.foodSinceLastSpawn += deliveredAmount;
 
         // Record metrics
         if (this.metrics) {
