@@ -368,8 +368,8 @@ body {
   background: rgba(20, 20, 20, 0.9);
   border: 2px solid rgba(255, 150, 100, 0.3);
   border-radius: 12px;
-  padding: 15px;
-  min-width: 280px;
+  padding: 12px;
+  min-width: 220px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
   pointer-events: auto;
@@ -377,41 +377,41 @@ body {
 
 #debugPanel h3 {
   color: #ff9664;
-  font-size: 1em;
-  margin-bottom: 15px;
+  font-size: 0.9em;
+  margin-bottom: 10px;
   text-align: center;
   text-transform: uppercase;
-  letter-spacing: 1.5px;
+  letter-spacing: 1px;
   font-weight: 600;
 }
 
 .debug-section {
-  margin: 15px 0;
-  padding: 12px;
+  margin: 10px 0;
+  padding: 8px;
   background: rgba(255, 150, 100, 0.05);
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid rgba(255, 150, 100, 0.15);
 }
 
 .debug-section h4 {
   color: #ff9664;
-  font-size: 0.85em;
-  margin-bottom: 10px;
+  font-size: 0.75em;
+  margin-bottom: 8px;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   font-weight: 600;
   opacity: 0.9;
 }
 
 .debug-control {
-  margin: 10px 0;
+  margin: 6px 0;
 }
 
 .debug-control label {
   display: block;
   color: #ccc;
-  font-size: 0.9em;
-  margin-bottom: 6px;
+  font-size: 0.8em;
+  margin-bottom: 4px;
   font-weight: 500;
 }
 

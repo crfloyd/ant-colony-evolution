@@ -28,6 +28,8 @@ export class Game {
   private app: Application;
   private camera!: Camera;
   private worldContainer!: Container;
+  private staticContainer!: Container; // For ground and rocks
+  private dynamicContainer!: Container; // For ants, food, colony
   private pheromoneGrid!: PheromoneGrid;
   private colony!: Colony;
   private foodManager!: FoodManager;
@@ -41,6 +43,7 @@ export class Game {
   private showRockColliders: boolean = false;
   private selectedAnt: any = null;
   private selectionGraphics: Graphics | null = null;
+  private mouseDownPos: { x: number; y: number } | null = null;
 
   // UI elements
   private antCountEl: HTMLElement;
@@ -87,7 +90,7 @@ export class Game {
       canvas,
       width: window.innerWidth,
       height: window.innerHeight,
-      backgroundColor: 0x5a9c3e, // Muted green (Stardew Valley style)
+      backgroundColor: 0xc4a57b, // Light dirt color (tan/brown)
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     });
@@ -260,29 +263,83 @@ export class Game {
       console.error('Failed to load small rock sprite sheet:', err);
     }
 
-    // Create world container with sorting enabled to prevent flickering
+    // Create world container hierarchy for performance
+    // Main container holds all sub-containers
     this.worldContainer = new Container();
-    this.worldContainer.sortableChildren = true; // Enable z-index sorting
-
-    // Disable culling to prevent sprites from being clipped
+    this.worldContainer.sortableChildren = false; // No sorting at top level
     this.worldContainer.cullable = false;
-
-    // Set explicit bounds to prevent automatic clipping
     this.worldContainer.boundsArea = new Rectangle(
       -500, -500,
       this.worldWidth + 1000,
       this.worldHeight + 1000
     );
 
+    // Static layer: ground, rocks (no sorting needed - render order is creation order)
+    this.staticContainer = new Container();
+    this.staticContainer.sortableChildren = false; // Static objects don't need z-sorting
+
+    // Dynamic layer: ants, food, colony (sorting enabled for depth)
+    this.dynamicContainer = new Container();
+    this.dynamicContainer.sortableChildren = true; // Only sort dynamic objects
+
+    this.worldContainer.addChild(this.staticContainer);
+    this.worldContainer.addChild(this.dynamicContainer);
     this.app.stage.addChild(this.worldContainer);
 
-    // Add solid green ground background (inset slightly to stay within border)
+    // Add textured dirt ground background with Gaussian-distributed patches
     const groundGraphics = new Graphics();
     const borderInset = 2; // Inset to stay within 4px border stroke
+
+    // Base dirt color (slightly darker than backgroundColor)
     groundGraphics.rect(borderInset, borderInset, this.worldWidth - borderInset * 2, this.worldHeight - borderInset * 2);
-    groundGraphics.fill({ color: 0x5a9c3e }); // Muted green matching background
+    groundGraphics.fill({ color: 0xb89968 }); // Darker tan/brown base
+
+    // Helper: Generate Gaussian-distributed random number (Box-Muller transform)
+    const gaussianRandom = (mean: number = 0, stdDev: number = 1): number => {
+      const u1 = Math.random();
+      const u2 = Math.random();
+      const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+      return z0 * stdDev + mean;
+    };
+
+    // Add random dirt patches with Gaussian distribution
+    const patchCount = 800; // Number of patches
+    const patchColors = [
+      0xc4a57b, // Light tan (matches backgroundColor)
+      0xd4b58b, // Lighter tan
+      0xa89058, // Darker brown
+      0xc0a070, // Medium tan
+      0xb0945f, // Medium brown
+    ];
+
+    for (let i = 0; i < patchCount; i++) {
+      // Gaussian-distributed position (clustered around random centers)
+      const centerX = Math.random() * this.worldWidth;
+      const centerY = Math.random() * this.worldHeight;
+      const offsetX = gaussianRandom(0, 80); // Standard deviation of 80 pixels
+      const offsetY = gaussianRandom(0, 80);
+
+      const x = Math.max(borderInset, Math.min(this.worldWidth - borderInset, centerX + offsetX));
+      const y = Math.max(borderInset, Math.min(this.worldHeight - borderInset, centerY + offsetY));
+
+      // Gaussian-distributed size (mostly small, occasionally large)
+      const baseSize = 40;
+      const sizeVariation = Math.abs(gaussianRandom(0, 15));
+      const radius = baseSize + sizeVariation;
+
+      // Random color from palette
+      const color = patchColors[Math.floor(Math.random() * patchColors.length)];
+
+      // Random opacity (0.1 to 0.4)
+      const alpha = 0.1 + Math.random() * 0.3;
+
+      // Draw patch as a soft circle
+      groundGraphics.circle(x, y, radius);
+      groundGraphics.fill({ color, alpha });
+    }
+
     groundGraphics.zIndex = -1000; // Behind everything else
-    this.worldContainer.addChild(groundGraphics);
+    this.staticContainer.addChild(groundGraphics);
 
     // Add ground clutter sprites scattered randomly (decorative shadows)
     if (groundClutterTextures.length > 0) {
@@ -315,7 +372,7 @@ export class Game {
         // Behind most things but above ground
         clutterSprite.zIndex = -900;
 
-        this.worldContainer.addChild(clutterSprite);
+        this.staticContainer.addChild(clutterSprite);
       }
 
       console.log(`Scattered ${clutterCount} ground clutter sprites (decorative, no collision)`);
@@ -341,15 +398,21 @@ export class Game {
       );
     };
 
-    // Initial camera setup
-    resetCamera();
+    // Initial camera setup - use config zoom and center on colony
+    this.camera.setZoom(CONFIG.CAMERA_START_ZOOM);
+    this.camera.centerOn(
+      this.worldWidth / 2,
+      this.worldHeight / 2,
+      this.app.screen.width,
+      this.app.screen.height
+    );
 
     // Set up spacebar to reset camera (same as initial setup)
     this.camera.setRecenterCallback(resetCamera);
 
-    // Initialize systems
+    // Initialize systems (pheromones go in static container so they render below ants)
     this.pheromoneGrid = new PheromoneGrid(
-      this.worldContainer,
+      this.staticContainer,
       this.worldWidth,
       this.worldHeight,
       CONFIG.PHEROMONE_CELL_SIZE
@@ -359,23 +422,33 @@ export class Game {
     this.metrics = new Metrics();
 
     // Initialize obstacle manager with saved settings FIRST (so rocks exist before food/ants spawn)
-    const savedLargeCount = localStorage.getItem('rockSettings.largeCount');
-    const savedLargeSpread = localStorage.getItem('rockSettings.largeSpread');
-    const savedMediumCount = localStorage.getItem('rockSettings.mediumCount');
-    const savedMediumSpread = localStorage.getItem('rockSettings.mediumSpread');
-    const savedSmallCount = localStorage.getItem('rockSettings.smallCount');
-    const savedSmallSpread = localStorage.getItem('rockSettings.smallSpread');
+    const savedLargeDensityInit = localStorage.getItem('rockSettings.largeDensity');
+    const savedLargeSpreadInit = localStorage.getItem('rockSettings.largeSpread');
+    const savedMediumDensityInit = localStorage.getItem('rockSettings.mediumDensity');
+    const savedMediumSpreadInit = localStorage.getItem('rockSettings.mediumSpread');
+    const savedSmallDensityInit = localStorage.getItem('rockSettings.smallDensity');
+    const savedSmallSpreadInit = localStorage.getItem('rockSettings.smallSpread');
+
+    // Calculate counts from saved density multipliers
+    const worldArea = this.worldWidth * this.worldHeight;
+    const largeDensityMult = savedLargeDensityInit ? parseFloat(savedLargeDensityInit) : 1.0;
+    const mediumDensityMult = savedMediumDensityInit ? parseFloat(savedMediumDensityInit) : 1.0;
+    const smallDensityMult = savedSmallDensityInit ? parseFloat(savedSmallDensityInit) : 1.0;
+
+    const largeCountInit = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_LARGE * largeDensityMult);
+    const mediumCountInit = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_MEDIUM * mediumDensityMult);
+    const smallCountInit = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_SMALL * smallDensityMult);
 
     this.obstacleManager = new ObstacleManager(
-      this.worldContainer,
+      this.staticContainer,
       this.worldWidth,
       this.worldHeight,
-      savedLargeCount ? parseInt(savedLargeCount) : undefined,
-      savedMediumCount ? parseInt(savedMediumCount) : undefined,
-      savedSmallCount ? parseInt(savedSmallCount) : undefined,
-      savedLargeSpread ? parseFloat(savedLargeSpread) : undefined,
-      savedMediumSpread ? parseFloat(savedMediumSpread) : undefined,
-      savedSmallSpread ? parseFloat(savedSmallSpread) : undefined
+      largeCountInit,
+      mediumCountInit,
+      smallCountInit,
+      savedLargeSpreadInit ? parseFloat(savedLargeSpreadInit) : undefined,
+      savedMediumSpreadInit ? parseFloat(savedMediumSpreadInit) : undefined,
+      savedSmallSpreadInit ? parseFloat(savedSmallSpreadInit) : undefined
     );
 
     // Create colony at center (but don't spawn ants yet)
@@ -387,11 +460,11 @@ export class Game {
       this.worldHeight,
       this.metrics
     );
-    this.worldContainer.addChild(this.colony.sprite);
+    this.dynamicContainer.addChild(this.colony.sprite);
 
     // Initialize food manager (pass obstacles and pheromone grid for spawn avoidance)
     this.foodManager = new FoodManager(
-      this.worldContainer,
+      this.dynamicContainer,
       this.worldWidth,
       this.worldHeight,
       this.obstacleManager,
@@ -400,7 +473,7 @@ export class Game {
     );
 
     // Now spawn initial ants (after rocks and food are ready)
-    this.colony.setWorldContainer(this.worldContainer);
+    this.colony.setWorldContainer(this.dynamicContainer);
 
     // Draw world boundaries
     this.drawWorldBounds();
@@ -415,7 +488,25 @@ export class Game {
     window.addEventListener('resize', () => this.onResize());
 
     // Add click handler for ant debugging
-    this.app.canvas.addEventListener('click', (e) => this.onCanvasClick(e));
+    // Track mousedown/mouseup to detect drags vs clicks
+    this.app.canvas.addEventListener('mousedown', (e) => {
+      this.mouseDownPos = { x: e.clientX, y: e.clientY };
+    });
+
+    this.app.canvas.addEventListener('mouseup', (e) => {
+      // Only trigger click if mouse hasn't moved much (not a drag)
+      if (this.mouseDownPos) {
+        const dx = e.clientX - this.mouseDownPos.x;
+        const dy = e.clientY - this.mouseDownPos.y;
+        const dragDistance = Math.sqrt(dx * dx + dy * dy);
+
+        // Consider it a click if moved less than 5 pixels
+        if (dragDistance < 5) {
+          this.onCanvasClick(e);
+        }
+      }
+      this.mouseDownPos = null;
+    });
 
     console.log('Game fully initialized!');
     console.log('Colony ants:', this.colony.getAntCount());
@@ -605,6 +696,10 @@ export class Game {
         <span class="debug-label">Trail latch:</span>
         <span class="debug-value">${ant.trailLatchTimer.toFixed(2)}s</span>
       </div>
+      <div class="debug-row">
+        <span class="debug-label">Trail lock:</span>
+        <span class="${ant.trailLockTimer > 0 ? 'debug-warning' : 'debug-value'}">${ant.trailLockTimer > 0 ? ant.trailLockTimer.toFixed(1) + 's' : 'None'}</span>
+      </div>
 
       <div class="debug-section-title">Pheromones</div>
       <div class="debug-row">
@@ -724,6 +819,7 @@ Real movement: ${Math.max(0, (ant.lastDistMoved || 0) - (ant.depenetrationDistTh
 Exploration: ${ant.explorationCommitment.toFixed(2)}s
 On trail: ${ant.onFoodTrail}
 Trail latch: ${ant.trailLatchTimer.toFixed(2)}s
+Trail lock: ${ant.trailLockTimer > 0 ? ant.trailLockTimer.toFixed(1) + 's' : 'None'}
 
 Pheromones:
 Food: ${foodPher.toFixed(3)}
@@ -847,49 +943,49 @@ ${obstacleInfo}
       });
     }
 
-    // Rock distribution sliders
-    const largeRockSlider = document.getElementById('largeRockSlider') as HTMLInputElement;
-    const largeRockCount = document.getElementById('largeRockCount');
+    // Rock distribution sliders (density-based)
+    const largeDensitySlider = document.getElementById('largeDensitySlider') as HTMLInputElement;
+    const largeDensityValue = document.getElementById('largeDensityValue');
     const largeSpreadSlider = document.getElementById('largeSpreadSlider') as HTMLInputElement;
     const largeSpreadValue = document.getElementById('largeSpreadValue');
 
-    const mediumRockSlider = document.getElementById('mediumRockSlider') as HTMLInputElement;
-    const mediumRockCount = document.getElementById('mediumRockCount');
+    const mediumDensitySlider = document.getElementById('mediumDensitySlider') as HTMLInputElement;
+    const mediumDensityValue = document.getElementById('mediumDensityValue');
     const mediumSpreadSlider = document.getElementById('mediumSpreadSlider') as HTMLInputElement;
     const mediumSpreadValue = document.getElementById('mediumSpreadValue');
 
-    const smallRockSlider = document.getElementById('smallRockSlider') as HTMLInputElement;
-    const smallRockCount = document.getElementById('smallRockCount');
+    const smallDensitySlider = document.getElementById('smallDensitySlider') as HTMLInputElement;
+    const smallDensityValue = document.getElementById('smallDensityValue');
     const smallSpreadSlider = document.getElementById('smallSpreadSlider') as HTMLInputElement;
     const smallSpreadValue = document.getElementById('smallSpreadValue');
 
     // Load saved rock settings from localStorage
-    const savedLargeCount = localStorage.getItem('rockSettings.largeCount');
+    const savedLargeDensity = localStorage.getItem('rockSettings.largeDensity');
     const savedLargeSpread = localStorage.getItem('rockSettings.largeSpread');
-    const savedMediumCount = localStorage.getItem('rockSettings.mediumCount');
+    const savedMediumDensity = localStorage.getItem('rockSettings.mediumDensity');
     const savedMediumSpread = localStorage.getItem('rockSettings.mediumSpread');
-    const savedSmallCount = localStorage.getItem('rockSettings.smallCount');
+    const savedSmallDensity = localStorage.getItem('rockSettings.smallDensity');
     const savedSmallSpread = localStorage.getItem('rockSettings.smallSpread');
 
-    if (savedLargeCount && largeRockSlider && largeRockCount) {
-      largeRockSlider.value = savedLargeCount;
-      largeRockCount.textContent = savedLargeCount;
+    if (savedLargeDensity && largeDensitySlider && largeDensityValue) {
+      largeDensitySlider.value = savedLargeDensity;
+      largeDensityValue.textContent = savedLargeDensity + 'x';
     }
     if (savedLargeSpread && largeSpreadSlider && largeSpreadValue) {
       largeSpreadSlider.value = savedLargeSpread;
       largeSpreadValue.textContent = savedLargeSpread;
     }
-    if (savedMediumCount && mediumRockSlider && mediumRockCount) {
-      mediumRockSlider.value = savedMediumCount;
-      mediumRockCount.textContent = savedMediumCount;
+    if (savedMediumDensity && mediumDensitySlider && mediumDensityValue) {
+      mediumDensitySlider.value = savedMediumDensity;
+      mediumDensityValue.textContent = savedMediumDensity + 'x';
     }
     if (savedMediumSpread && mediumSpreadSlider && mediumSpreadValue) {
       mediumSpreadSlider.value = savedMediumSpread;
       mediumSpreadValue.textContent = savedMediumSpread;
     }
-    if (savedSmallCount && smallRockSlider && smallRockCount) {
-      smallRockSlider.value = savedSmallCount;
-      smallRockCount.textContent = savedSmallCount;
+    if (savedSmallDensity && smallDensitySlider && smallDensityValue) {
+      smallDensitySlider.value = savedSmallDensity;
+      smallDensityValue.textContent = savedSmallDensity + 'x';
     }
     if (savedSmallSpread && smallSpreadSlider && smallSpreadValue) {
       smallSpreadSlider.value = savedSmallSpread;
@@ -910,12 +1006,19 @@ ${obstacleInfo}
 
     // Helper function to respawn rocks
     const respawnRocks = () => {
-      if (!largeRockSlider || !mediumRockSlider || !smallRockSlider) return;
+      if (!largeDensitySlider || !mediumDensitySlider || !smallDensitySlider) return;
       if (!largeSpreadSlider || !mediumSpreadSlider || !smallSpreadSlider) return;
 
-      const largeCount = parseInt(largeRockSlider.value);
-      const mediumCount = parseInt(mediumRockSlider.value);
-      const smallCount = parseInt(smallRockSlider.value);
+      // Calculate counts from density multipliers
+      const worldArea = this.worldWidth * this.worldHeight;
+      const largeDensityMult = parseFloat(largeDensitySlider.value);
+      const mediumDensityMult = parseFloat(mediumDensitySlider.value);
+      const smallDensityMult = parseFloat(smallDensitySlider.value);
+
+      const largeCount = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_LARGE * largeDensityMult);
+      const mediumCount = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_MEDIUM * mediumDensityMult);
+      const smallCount = Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_SMALL * smallDensityMult);
+
       const largeSpread = parseFloat(largeSpreadSlider.value);
       const mediumSpread = parseFloat(mediumSpreadSlider.value);
       const smallSpread = parseFloat(smallSpreadSlider.value);
@@ -925,7 +1028,7 @@ ${obstacleInfo}
 
       // Create new obstacle manager with custom counts
       this.obstacleManager = new ObstacleManager(
-        this.worldContainer,
+        this.staticContainer,
         this.worldWidth,
         this.worldHeight,
         largeCount,
@@ -943,14 +1046,14 @@ ${obstacleInfo}
     // Initial rock stats update
     updateRockStats();
 
-    if (largeRockSlider && largeRockCount) {
-      largeRockSlider.addEventListener('input', () => {
-        largeRockCount.textContent = largeRockSlider.value;
-        localStorage.setItem('rockSettings.largeCount', largeRockSlider.value);
+    if (largeDensitySlider && largeDensityValue) {
+      largeDensitySlider.addEventListener('input', () => {
+        largeDensityValue.textContent = largeDensitySlider.value + 'x';
+        localStorage.setItem('rockSettings.largeDensity', largeDensitySlider.value);
         respawnRocks();
       });
-      largeRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
-      largeRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+      largeDensitySlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      largeDensitySlider.addEventListener('touchstart', (e) => e.stopPropagation());
     }
 
     if (largeSpreadSlider && largeSpreadValue) {
@@ -963,14 +1066,14 @@ ${obstacleInfo}
       largeSpreadSlider.addEventListener('touchstart', (e) => e.stopPropagation());
     }
 
-    if (mediumRockSlider && mediumRockCount) {
-      mediumRockSlider.addEventListener('input', () => {
-        mediumRockCount.textContent = mediumRockSlider.value;
-        localStorage.setItem('rockSettings.mediumCount', mediumRockSlider.value);
+    if (mediumDensitySlider && mediumDensityValue) {
+      mediumDensitySlider.addEventListener('input', () => {
+        mediumDensityValue.textContent = mediumDensitySlider.value + 'x';
+        localStorage.setItem('rockSettings.mediumDensity', mediumDensitySlider.value);
         respawnRocks();
       });
-      mediumRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
-      mediumRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+      mediumDensitySlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      mediumDensitySlider.addEventListener('touchstart', (e) => e.stopPropagation());
     }
 
     if (mediumSpreadSlider && mediumSpreadValue) {
@@ -983,14 +1086,14 @@ ${obstacleInfo}
       mediumSpreadSlider.addEventListener('touchstart', (e) => e.stopPropagation());
     }
 
-    if (smallRockSlider && smallRockCount) {
-      smallRockSlider.addEventListener('input', () => {
-        smallRockCount.textContent = smallRockSlider.value;
-        localStorage.setItem('rockSettings.smallCount', smallRockSlider.value);
+    if (smallDensitySlider && smallDensityValue) {
+      smallDensitySlider.addEventListener('input', () => {
+        smallDensityValue.textContent = smallDensitySlider.value + 'x';
+        localStorage.setItem('rockSettings.smallDensity', smallDensitySlider.value);
         respawnRocks();
       });
-      smallRockSlider.addEventListener('mousedown', (e) => e.stopPropagation());
-      smallRockSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+      smallDensitySlider.addEventListener('mousedown', (e) => e.stopPropagation());
+      smallDensitySlider.addEventListener('touchstart', (e) => e.stopPropagation());
     }
 
     if (smallSpreadSlider && smallSpreadValue) {
@@ -1017,28 +1120,50 @@ ${obstacleInfo}
 
     const adjustedDelta = deltaTime * this.simulationSpeed;
 
+    // Performance profiling
+    const perfStart = performance.now();
+    const timings: Record<string, number> = {};
+
     // Update camera
+    let t = performance.now();
     this.camera.update();
+    timings.camera = performance.now() - t;
 
     // Update pheromone grid
+    t = performance.now();
     this.pheromoneGrid.update();
-    this.pheromoneGrid.render(true, true);
+    timings.pheromoneUpdate = performance.now() - t;
+
+    // Get camera viewport for culling pheromone rendering
+    t = performance.now();
+    const viewportBounds = this.camera.getViewportBounds(window.innerWidth, window.innerHeight);
+    this.pheromoneGrid.render(true, true, viewportBounds);
+    timings.pheromoneRender = performance.now() - t;
 
     // Update food manager
+    t = performance.now();
     this.foodManager.update(adjustedDelta);
+    timings.food = performance.now() - t;
 
     // Render obstacle colliders if debug enabled
+    t = performance.now();
     this.obstacleManager.renderDebug(this.showRockColliders);
+    timings.obstacleDebug = performance.now() - t;
 
     // Update colony (pass food sources and obstacles for sensing)
+    t = performance.now();
     this.colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager);
+    timings.colony = performance.now() - t;
 
     // Track metrics for all ants
+    t = performance.now();
     for (const ant of this.colony.ants) {
       this.metrics.recordStateTime(ant.state === 'FORAGING', adjustedDelta);
     }
+    timings.metrics = performance.now() - t;
 
     // Check ant-food collisions (only for ants not carrying food)
+    t = performance.now();
     for (const ant of this.colony.ants) {
       if (!ant.hasFood) {
         const nearbyFood = this.foodManager.checkCollisions(ant.position, CONFIG.ANT_FOOD_PICKUP_RADIUS);
@@ -1051,9 +1176,19 @@ ${obstacleInfo}
         }
       }
     }
+    timings.collisions = performance.now() - t;
 
     // Update UI
+    t = performance.now();
     this.updateUI();
+    timings.ui = performance.now() - t;
+
+    const totalTime = performance.now() - perfStart;
+
+    // Log performance every 60 frames
+    if (this.app.ticker.FPS < 30 && Math.random() < 0.016) {
+      console.log('[PERF] Frame time:', totalTime.toFixed(2), 'ms', timings);
+    }
   }
 
   private updateUI(): void {

@@ -172,10 +172,17 @@ export class FoodManager {
   }
 
   public update(deltaTime: number): void {
-    // Remove depleted food sources
+    // Remove depleted food sources and mark their trails for faster decay
     for (let i = this.foodSources.length - 1; i >= 0; i--) {
       if (this.foodSources[i].isEmpty()) {
-        this.foodSources[i].destroy();
+        const depletedFood = this.foodSources[i];
+
+        // Mark pheromone trails to this food source for accelerated decay
+        if (this.pheromoneGrid && depletedFood.id) {
+          this.pheromoneGrid.markFoodSourceDepleted(depletedFood.id);
+        }
+
+        depletedFood.destroy();
         this.foodSources.splice(i, 1);
       }
     }

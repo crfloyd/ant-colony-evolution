@@ -161,6 +161,8 @@ export class ObstacleManager {
   private container: Container;
   private worldWidth: number;
   private worldHeight: number;
+  private spatialGrid: Map<string, Obstacle[]> = new Map();
+  private gridCellSize: number = 200; // Grid cell size for spatial partitioning
 
   constructor(
     container: Container,
@@ -178,6 +180,7 @@ export class ObstacleManager {
     this.worldHeight = worldHeight;
 
     this.spawnObstacles(largeCount, mediumCount, smallCount, largeSpread, mediumSpread, smallSpread);
+    this.buildSpatialGrid();
   }
 
   private spawnObstacles(
@@ -200,10 +203,11 @@ export class ObstacleManager {
       return mean + z0 * stdDev;
     };
 
-    // Distribution: more large rocks, medium amount of medium, lots of small to fill gaps
-    const largeCount = customLargeCount ?? 39;
-    const mediumCount = customMediumCount ?? 56;
-    const smallCount = customSmallCount ?? 134;
+    // Calculate counts from density (scales with world size)
+    const worldArea = this.worldWidth * this.worldHeight;
+    const largeCount = customLargeCount ?? Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_LARGE);
+    const mediumCount = customMediumCount ?? Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_MEDIUM);
+    const smallCount = customSmallCount ?? Math.floor(worldArea * CONFIG.OBSTACLE_DENSITY_SMALL);
     const largeSpread = customLargeSpread ?? 0.8;
     const mediumSpread = customMediumSpread ?? 0.7;
     const smallSpread = customSmallSpread ?? 0.7;
@@ -300,11 +304,17 @@ export class ObstacleManager {
             };
           }
 
-          // Clamp to world bounds with extra margin (rocks can be rotated and extend beyond base size)
+          // Reject out-of-bounds positions instead of clamping (prevents edge pileup)
           const halfSize = size / 2;
           const edgeMargin = 100; // Extra margin to prevent clipping at edges
-          position.x = Math.max(halfSize + edgeMargin, Math.min(this.worldWidth - halfSize - edgeMargin, position.x));
-          position.y = Math.max(halfSize + edgeMargin, Math.min(this.worldHeight - halfSize - edgeMargin, position.y));
+          const minPos = halfSize + edgeMargin;
+          const maxPosX = this.worldWidth - halfSize - edgeMargin;
+          const maxPosY = this.worldHeight - halfSize - edgeMargin;
+
+          if (position.x < minPos || position.x > maxPosX || position.y < minPos || position.y > maxPosY) {
+            attempts++;
+            continue; // Reject and retry
+          }
 
           // Check colony clearance
           const dx = position.x - centerX;
@@ -366,7 +376,11 @@ export class ObstacleManager {
   }
 
   public checkCollision(position: Vector2, radius: number = CONFIG.OBSTACLE_DEFAULT_COLLISION_RADIUS): Obstacle | null {
-    for (const obstacle of this.obstacles) {
+    // Use spatial grid for fast lookup
+    const searchRadius = radius + 100; // Add buffer for max obstacle size
+    const nearby = this.getNearbyObstacles(position.x, position.y, searchRadius);
+
+    for (const obstacle of nearby) {
       // Check if circle (ant) intersects with circle (obstacle)
       // Use collision offset for accurate collision position
       const collisionX = obstacle.position.x + obstacle.collisionOffset.x;
@@ -385,6 +399,44 @@ export class ObstacleManager {
 
   public getObstacles(): Obstacle[] {
     return this.obstacles;
+  }
+
+  // Get nearby obstacles using spatial grid (much faster than checking all obstacles)
+  public getNearbyObstacles(x: number, y: number, radius: number): Obstacle[] {
+    const nearby: Obstacle[] = [];
+    const cellX = Math.floor(x / this.gridCellSize);
+    const cellY = Math.floor(y / this.gridCellSize);
+    const cellRadius = Math.ceil(radius / this.gridCellSize);
+
+    // Check surrounding cells
+    for (let dy = -cellRadius; dy <= cellRadius; dy++) {
+      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+        const key = `${cellX + dx},${cellY + dy}`;
+        const cellObstacles = this.spatialGrid.get(key);
+        if (cellObstacles) {
+          nearby.push(...cellObstacles);
+        }
+      }
+    }
+
+    return nearby;
+  }
+
+  private buildSpatialGrid(): void {
+    this.spatialGrid.clear();
+
+    for (const obstacle of this.obstacles) {
+      const cellX = Math.floor(obstacle.position.x / this.gridCellSize);
+      const cellY = Math.floor(obstacle.position.y / this.gridCellSize);
+      const key = `${cellX},${cellY}`;
+
+      if (!this.spatialGrid.has(key)) {
+        this.spatialGrid.set(key, []);
+      }
+      this.spatialGrid.get(key)!.push(obstacle);
+    }
+
+    console.log(`[Spatial Grid] Built grid with ${this.spatialGrid.size} cells for ${this.obstacles.length} obstacles`);
   }
 
   public getRockCounts(): { large: number; medium: number; small: number } {

@@ -72,6 +72,16 @@ public stuckCounter: number = 0;
   private trailLatchTimer: number = 0;
   private trailEndCooldown: number = 0;
 
+  // Trail lock system (Task 17) - prevent following dead-end trails
+  private trailLockTimer: number = 0; // Time remaining locked from following trails
+  private trailFollowStartTime: number = 0; // When we started following current trail
+  private trailFollowDistance: number = 0; // Distance traveled while on trail
+
+  // Emergency unstuck system - detect geometric traps
+  private unstuckHistory: number[] = []; // Timestamps of recent unstuck triggers
+  public emergencyModeTimer: number = 0; // Time remaining in emergency random walk
+  private emergencyDirection: number = 0; // Random direction for emergency walk
+
   // Exploration commitment for smooth foraging movement
   private explorationDirection: number = 0; // Current exploration heading
   private explorationCommitment: number = 0; // Time remaining to stick with current direction
@@ -244,8 +254,10 @@ public stuckCounter: number = 0;
     this.timeSinceLastFood += deltaTime;
 
     // Energy consumption (and cap deltaTime to prevent huge drains)
+    // Ants carrying food have greatly reduced energy drain (they're eating on the way!)
     const cappedDelta = Math.min(deltaTime, CONFIG.ANT_MAX_DELTA_TIME);
-    this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta;
+    const energyMultiplier = this.hasFood ? 0.2 : 1.0; // 80% reduction when carrying food
+    this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier;
 
     if (this.energy <= 0) {
       this.isDead = true;
@@ -271,6 +283,12 @@ public stuckCounter: number = 0;
     }
     if (this.ignorePheromoneTimer > 0) {
       this.ignorePheromoneTimer = Math.max(0, this.ignorePheromoneTimer - deltaTime);
+    }
+    if (this.trailLockTimer > 0) {
+      this.trailLockTimer = Math.max(0, this.trailLockTimer - deltaTime);
+    }
+    if (this.emergencyModeTimer > 0) {
+      this.emergencyModeTimer = Math.max(0, this.emergencyModeTimer - deltaTime);
     }
 
     // Process outputs (unless in cooldown period)
@@ -375,6 +393,25 @@ public stuckCounter: number = 0;
           console.log(`[Selected Ant] Triggering unstuck recovery (counter: ${this.stuckCounter.toFixed(2)}s)`);
         }
 
+        // Track unstuck event and check for geometric trap
+        this.unstuckHistory.push(this.age);
+
+        // Remove old events outside the window
+        const windowStart = this.age - CONFIG.ANT_EMERGENCY_UNSTUCK_WINDOW;
+        this.unstuckHistory = this.unstuckHistory.filter(time => time >= windowStart);
+
+        // Check if we're stuck in a geometric trap (multiple unstucks in short time)
+        if (this.unstuckHistory.length >= CONFIG.ANT_EMERGENCY_UNSTUCK_COUNT) {
+          // GEOMETRIC TRAP DETECTED! Enter emergency mode
+          this.emergencyModeTimer = CONFIG.ANT_EMERGENCY_MODE_DURATION;
+          this.emergencyDirection = Math.random() * Math.PI * 2; // Pick random escape direction
+          this.unstuckHistory = []; // Clear history to avoid re-triggering
+
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[EMERGENCY] Geometric trap detected! ${CONFIG.ANT_EMERGENCY_UNSTUCK_COUNT} unstucks in ${CONFIG.ANT_EMERGENCY_UNSTUCK_WINDOW}s. Entering emergency random walk for ${CONFIG.ANT_EMERGENCY_MODE_DURATION}s at angle ${(this.emergencyDirection * 180 / Math.PI).toFixed(1)}°`);
+          }
+        }
+
         // Steer backward with jitter
         const back = { x: -this.velocity.x, y: -this.velocity.y };
         const backMag = Math.hypot(back.x, back.y);
@@ -473,17 +510,25 @@ public stuckCounter: number = 0;
           }
         }
 
-        if (shouldDeposit && this.role === AntRole.SCOUT) {
-          // Scouts deposit with fade-in based on distance from colony
-          const distFromColony = Math.sqrt(
-            (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
-          );
+        if (shouldDeposit) {
+          // All ants deposit homePher while foraging to mark safe/explored areas
+          let amount = 0;
 
-          // Fade in trail strength based on distance from colony (no hard gate)
-          const fadeStart = CONFIG.LEVY_SCOUT_HOMEPHER_FADE_START;
-          const fadeFactor = Math.min(1.0, Math.max(0, (distFromColony - fadeStart) / fadeStart));
+          if (this.role === AntRole.SCOUT) {
+            // Scouts deposit stronger trails with fade-in based on distance from colony
+            const distFromColony = Math.sqrt(
+              (this.position.x - this.colony.x) ** 2 + (this.position.y - this.colony.y) ** 2
+            );
 
-          const amount = CONFIG.PHEROMONE_SCOUT_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * fadeFactor;
+            // Fade in trail strength based on distance from colony (no hard gate)
+            const fadeStart = CONFIG.LEVY_SCOUT_HOMEPHER_FADE_START;
+            const fadeFactor = Math.min(1.0, Math.max(0, (distFromColony - fadeStart) / fadeStart));
+
+            amount = CONFIG.PHEROMONE_SCOUT_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * fadeFactor;
+          } else {
+            // Foragers deposit weaker homePher to mark safe traversable areas
+            amount = CONFIG.PHEROMONE_FORAGER_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * 0.3;
+          }
 
           if (amount > 0.001) { // Only deposit if significant
             this.pheromoneGrid.depositPheromone(
@@ -499,22 +544,6 @@ public stuckCounter: number = 0;
             this.lastHomePheromoneDepositPos = { x: this.position.x, y: this.position.y };
           }
         }
-        // Foragers can optionally deposit weak homePher too (trail reinforcement)
-        // Currently disabled - uncomment if desired
-        /*
-        else if (shouldDeposit) {
-          const amount = CONFIG.PHEROMONE_FORAGER_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE * 0.5;
-          this.pheromoneGrid.depositPheromone(
-            this.position.x,
-            this.position.y,
-            'homePher',
-            amount,
-            undefined,
-            obstacleManager
-          );
-          this.lastHomePheromoneDepositPos = { x: this.position.x, y: this.position.y };
-        }
-        */
       }
     }
 
@@ -696,7 +725,9 @@ public stuckCounter: number = 0;
   private sweepAndSlide(dt: number, obstacleManager: any): void {
     let remaining = 1.0;                       // normalized time in [0,1] for this frame
     let iter = 0;
-    const walls = obstacleManager.getObstacles();
+    // Use spatial grid to only check nearby obstacles (massive performance boost)
+    const searchRadius = CONFIG.ANT_COLLISION_RADIUS + 200; // Check obstacles within reasonable range
+    const walls = obstacleManager.getNearbyObstacles(this.position.x, this.position.y, searchRadius);
     const r = CONFIG.ANT_COLLISION_RADIUS;
 
     // Optional: substep if the ant moves too far in one frame
@@ -999,21 +1030,40 @@ public stuckCounter: number = 0;
       return;
     }
 
-    // PRIORITY 2: Follow pheromone trails with hysteresis
+    // PRIORITY 2: Follow pheromone trails with hysteresis (unless trail-locked)
     const currentPher = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher');
 
     // Hysteresis: different thresholds for entering vs exiting trail mode
     if (!this.onFoodTrail) {
-      if (currentPher >= CONFIG.TRAIL_ENTER_LEVEL) {
+      // Only enter trail if not locked AND pheromone is strong enough
+      if (this.trailLockTimer <= 0 && currentPher >= CONFIG.TRAIL_ENTER_LEVEL) {
         this.onFoodTrail = true;
         this.trailLatchTimer = CONFIG.TRAIL_LATCH_TIME;
         this.explorationCommitment = 0; // Reset exploration when entering trail
+        this.trailFollowStartTime = this.age; // Track when we started following
+        this.trailFollowDistance = 0; // Reset distance tracker
       }
     } else {
+      // Track distance traveled while on trail
+      const distThisFrame = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2) * deltaTime;
+      this.trailFollowDistance += distThisFrame;
+
       if (this.trailLatchTimer > 0) {
         this.trailLatchTimer -= deltaTime;
       }
       if (currentPher < CONFIG.TRAIL_EXIT_LEVEL && this.trailLatchTimer <= 0) {
+        // Exiting trail - check if we should trigger trail lock
+        const timeOnTrail = this.age - this.trailFollowStartTime;
+
+        // If we followed a trail for a while but didn't find food, lock ourselves out
+        if (timeOnTrail >= CONFIG.TRAIL_LOCK_MIN_FOLLOW_TIME &&
+            this.trailFollowDistance >= CONFIG.TRAIL_LOCK_MIN_DISTANCE) {
+          this.trailLockTimer = CONFIG.TRAIL_LOCK_DURATION;
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Trail Lock] Followed dead-end trail for ${timeOnTrail.toFixed(1)}s (${this.trailFollowDistance.toFixed(0)}px). Locked for ${CONFIG.TRAIL_LOCK_DURATION}s.`);
+          }
+        }
+
         this.onFoodTrail = false;
         this.trailEndCooldown = CONFIG.TRAIL_END_COOLDOWN; // Start cooldown
       }
@@ -1258,9 +1308,19 @@ public stuckCounter: number = 0;
     let dirX: number;
     let dirY: number;
 
+    // EMERGENCY MODE: Random walk to escape geometric trap
+    if (this.emergencyModeTimer > 0) {
+      // Use random direction instead of colony direction
+      dirX = Math.cos(this.emergencyDirection);
+      dirY = Math.sin(this.emergencyDirection);
+
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[EMERGENCY] Random walk at ${(this.emergencyDirection * 180 / Math.PI).toFixed(1)}° (${this.emergencyModeTimer.toFixed(1)}s remaining)`);
+      }
+    }
     // If stuck OR in recovery (ignore pheromone timer active), navigate directly to colony
     // This prevents getting trapped in pheromone loops
-    if (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0) {
+    else if (this.stuckCounter > 0.1 || this.ignorePheromoneTimer > 0) {
       if (this.id === Ant.selectedAntId) {
         console.log(`[Selected Ant] Ignoring gradients (stuck: ${this.stuckCounter.toFixed(2)}s, ignore timer: ${this.ignorePheromoneTimer.toFixed(2)}s), navigating directly to colony`);
       }
@@ -1368,6 +1428,11 @@ public stuckCounter: number = 0;
       // Update memory: remember this food location and reset timer
       this.lastFoodPosition = { x: foodPosition.x, y: foodPosition.y };
       this.timeSinceLastFood = 0;
+
+      // Trail lock: Successfully found food! Reset trail tracking and clear any lock
+      this.onFoodTrail = false; // Exit trail mode (we found the food!)
+      this.trailLockTimer = 0; // Clear any existing lock - this was a good trail
+      this.trailFollowDistance = 0;
 
       // Restore small amount of energy when finding food (Phase 3 Task 14)
       this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_FOOD_PICKUP);

@@ -15,6 +15,7 @@ export class PheromoneGrid {
   private height: number;
   private renderFrame: number = 0;
   private updateFrame: number = 0;
+  private depletedFoodSources: Set<string> = new Set(); // Track depleted food sources for faster decay
 
   constructor(
     container: Container,
@@ -94,12 +95,14 @@ export class PheromoneGrid {
     if (!this.isValidCell(gridX, gridY)) return;
 
     // Check if this grid cell overlaps with an obstacle
+    // Use full cell diagonal to be conservative and prevent pheromone near rock edges
     if (obstacleManager) {
       const cellCenterX = (gridX + 0.5) * this.cellSize;
       const cellCenterY = (gridY + 0.5) * this.cellSize;
+      const cellDiagonal = this.cellSize * Math.sqrt(2); // Full diagonal for safety
       const cellOverlapsObstacle = obstacleManager.checkCollision(
         { x: cellCenterX, y: cellCenterY },
-        this.cellSize / 2
+        cellDiagonal / 2
       );
 
       if (cellOverlapsObstacle) {
@@ -245,8 +248,13 @@ export class PheromoneGrid {
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         // Evaporation: grid *= (1 - rho) - separate rates for food/home
-        let foodValue = this.grid[y][x].foodPher * (1 - rho_food);
-        let homeValue = this.grid[y][x].homePher * (1 - rho_home);
+        // Apply accelerated decay (10x faster) for depleted food sources
+        const cell = this.grid[y][x];
+        const isDepleted = cell.foodSourceId && this.depletedFoodSources.has(cell.foodSourceId);
+        const effectiveFoodDecay = isDepleted ? rho_food * 10 : rho_food;
+
+        let foodValue = cell.foodPher * (1 - effectiveFoodDecay);
+        let homeValue = cell.homePher * (1 - rho_home);
 
         // Diffusion: grid = (1 - D)*grid + D*avg(neighbors) - separate rates
         // Calculate average of 4-connected neighbors
@@ -294,7 +302,7 @@ export class PheromoneGrid {
     }
   }
 
-  public render(showScoutTrails: boolean = true, showForagerTrails: boolean = true): void {
+  public render(showScoutTrails: boolean = true, showForagerTrails: boolean = true, cameraBounds?: { x: number; y: number; width: number; height: number }): void {
     // Only render pheromones every N frames for performance
     this.renderFrame++;
     if (this.renderFrame % CONFIG.PHEROMONE_RENDER_INTERVAL !== 0) return;
@@ -305,9 +313,22 @@ export class PheromoneGrid {
     // Forager trails have lower strength (CONFIG.FORAGER_HOMEPHER_STRENGTH = 1.0)
     const scoutTrailThreshold = CONFIG.PHEROMONE_SCOUT_TRAIL_THRESHOLD;
 
-    // Render pheromone trails - only render strong ones
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
+    // Calculate visible cell range (viewport culling for performance)
+    let minX = 0, maxX = this.width;
+    let minY = 0, maxY = this.height;
+
+    if (cameraBounds) {
+      // Add padding to render slightly beyond visible area
+      const padding = 50; // cells
+      minX = Math.max(0, Math.floor(cameraBounds.x / this.cellSize) - padding);
+      maxX = Math.min(this.width, Math.ceil((cameraBounds.x + cameraBounds.width) / this.cellSize) + padding);
+      minY = Math.max(0, Math.floor(cameraBounds.y / this.cellSize) - padding);
+      maxY = Math.min(this.height, Math.ceil((cameraBounds.y + cameraBounds.height) / this.cellSize) + padding);
+    }
+
+    // Render pheromone trails - only render strong ones in visible area
+    for (let y = minY; y < maxY; y++) {
+      for (let x = minX; x < maxX; x++) {
         const cell = this.grid[y][x];
 
         // Only render if there's a meaningful amount
@@ -352,5 +373,12 @@ export class PheromoneGrid {
 
   public getCellSize(): number {
     return this.cellSize;
+  }
+
+  public markFoodSourceDepleted(foodSourceId: string): void {
+    if (foodSourceId) {
+      this.depletedFoodSources.add(foodSourceId);
+      console.log(`[Pheromone] Marking food source ${foodSourceId} as depleted - trails will decay faster`);
+    }
   }
 }

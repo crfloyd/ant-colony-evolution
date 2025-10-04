@@ -1,8 +1,8 @@
 // Simulation Configuration Constants
 
 // World Settings
-export const WORLD_WIDTH = 8000;
-export const WORLD_HEIGHT = 8000;
+export const WORLD_WIDTH = 20000;
+export const WORLD_HEIGHT = 20000;
 
 // Colony Settings
 export const INITIAL_ANT_COUNT = 500; // Start small, let population grow naturally
@@ -31,9 +31,10 @@ export const FOOD_PICKUP_RADIUS = 20; // Default collision detection radius for 
 export const FOOD_SPAWN_MAX_ATTEMPTS_STRICT = 100; // Attempts before relaxing pheromone constraint
 export const FOOD_SPAWN_MAX_ATTEMPTS_TOTAL = 200; // Absolute maximum spawn attempts
 
-// Obstacle Settings
-export const MIN_OBSTACLES = 50;
-export const MAX_OBSTACLES = 100;
+// Obstacle Settings (density-based)
+export const OBSTACLE_DENSITY_LARGE = 0.0000009765625; // Rocks per square pixel (39 rocks / 8000^2 ≈ 0.00000097)
+export const OBSTACLE_DENSITY_MEDIUM = 0.00000140625; // 56 rocks / 8000^2 ≈ 0.0000014
+export const OBSTACLE_DENSITY_SMALL = 0.000003359375; // 134 rocks / 8000^2 ≈ 0.0000033
 export const MIN_OBSTACLE_SIZE = 80;
 export const MAX_OBSTACLE_SIZE = 480;
 export const OBSTACLE_COLONY_CLEARANCE = 500;
@@ -72,6 +73,9 @@ export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
 export const ANT_SAFE_DISTANCE_FROM_OBSTACLE = 20; // Safe push distance from obstacles
 export const ANT_STUCK_THRESHOLD = 1.0; // Seconds before ant triggers unstuck recovery (increased to allow counter to show)
 export const ANT_STUCK_BACKUP_DISTANCE = 10; // Distance to backup when stuck
+export const ANT_EMERGENCY_UNSTUCK_COUNT = 3; // Number of unstucks in window to trigger emergency mode
+export const ANT_EMERGENCY_UNSTUCK_WINDOW = 15; // Seconds to track unstuck history
+export const ANT_EMERGENCY_MODE_DURATION = 10; // Seconds of random walk in emergency mode
 export const ANT_WORLD_BOUNDARY_MARGIN = 50; // Margin from world edges
 export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy drains
 export const ANT_EXPECTED_MOVEMENT_RATIO = 0.3; // Minimum expected movement for stuck detection
@@ -91,9 +95,9 @@ export const ANT_RANDOM_TURN_ANGLE_RANGE = 0.5; // Random angle range for turns
 export const PHEROMONE_CELL_SIZE = 20;
 
 // Decay rates (evaporation) - separate for each type
-// homePher half-life ≈ 45s @ 20Hz → ρ ≈ 0.00154
+// homePher half-life ≈ 3 min @ 20Hz → ρ ≈ 0.000193 (persistent "safe area map")
 // foodPher half-life ≈ 20s @ 20Hz → ρ ≈ 0.00347
-export const PHEROMONE_HOME_DECAY_RATE = 0.00154; // Very slow decay for home trails
+export const PHEROMONE_HOME_DECAY_RATE = 0.000193; // Very slow decay - accumulates as safe area map
 export const PHEROMONE_FOOD_DECAY_RATE = 0.00347; // Faster decay for food trails
 
 // Diffusion rates - separate for each type (much smaller than before)
@@ -103,7 +107,7 @@ export const PHEROMONE_FOOD_DIFFUSION_RATE = 0.02; // Slightly more diffusion fo
 export const PHEROMONE_MAX_LEVEL = 10; // Maximum pheromone concentration per cell
 export const PHEROMONE_MIN_THRESHOLD = 0.00001; // Minimum level before clearing (very small to avoid flicker)
 export const PHEROMONE_UPDATE_INTERVAL = 3; // Update grid every N frames
-export const PHEROMONE_RENDER_INTERVAL = 5; // Render pheromones every N frames
+export const PHEROMONE_RENDER_INTERVAL = 10; // Render pheromones every N frames (increased for performance)
 export const PHEROMONE_RENDER_MIN_THRESHOLD = 0.003; // Minimum level to render (1-2% of fresh drop)
 
 // Distance-based deposit settings (replaces frame-based deposits)
@@ -147,6 +151,11 @@ export const TRAIL_EXIT_LEVEL = 0.02; // Lower threshold to stop (hysteresis)
 export const TRAIL_LATCH_TIME = 0.8; // Seconds to stay in mode
 export const TRAIL_END_COOLDOWN = 0.3; // Seconds to ignore trails after exiting
 
+// Trail lock system (Task 17) - prevent following dead-end trails
+export const TRAIL_LOCK_DURATION = 45; // Seconds to lock out from following trails after dead end
+export const TRAIL_LOCK_MIN_FOLLOW_TIME = 3; // Minimum seconds following trail before considering it a "real" trail
+export const TRAIL_LOCK_MIN_DISTANCE = 150; // Minimum distance traveled on trail to trigger lock (pixels)
+
 // Returning behavior
 export const RETURNING_COLONY_WEIGHT = 0.7; // Weight for direct colony direction
 export const RETURNING_GRADIENT_WEIGHT = 0.3; // Weight for homePher gradient
@@ -170,7 +179,7 @@ export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail
 export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning
 
 // Camera Settings
-export const CAMERA_START_ZOOM = 0.5;
+export const CAMERA_START_ZOOM = 0.45;
 export const CAMERA_MIN_ZOOM = 0.05;
 export const CAMERA_MAX_ZOOM = 3;
 export const CAMERA_MOVE_SPEED = 5;

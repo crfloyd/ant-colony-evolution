@@ -192,4 +192,13 @@ export class Camera {
     this.container.x = this.targetX;
     this.container.y = this.targetY;
   }
+
+  public getViewportBounds(viewWidth: number, viewHeight: number): { x: number; y: number; width: number; height: number } {
+    // Calculate world-space bounds of the visible viewport
+    const x = -this.container.x / this.zoom;
+    const y = -this.container.y / this.zoom;
+    const width = viewWidth / this.zoom;
+    const height = viewHeight / this.zoom;
+    return { x, y, width, height };
+  }
 }
