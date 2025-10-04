@@ -5,12 +5,17 @@ export const WORLD_WIDTH = 20000;
 export const WORLD_HEIGHT = 20000;
 
 // Colony Settings
-export const INITIAL_ANT_COUNT = 500; // Start small, let population grow naturally
+export const INITIAL_ANT_COUNT = 300; // Test FPS with fewer ants
 export const MAX_ANT_COUNT = 5000;
-export const COLONY_STARTING_FOOD = 100; // Increased to support initial spawning
-export const COLONY_RETURN_RADIUS = 440; // Distance within which ant can deliver food
+export const COLONY_STARTING_FOOD = 0; // Start with no food - ants must forage to grow population
+export const COLONY_RETURN_RADIUS = 380; // Distance within which ant can deliver food
 export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
 export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive generation culling
+
+// Evolution Settings
+export const MUTATION_RATE = 0.005; // ±0.005 per generation (0.5% change per offspring)
+export const TRAIT_MIN = 0.7; // Minimum trait multiplier
+export const TRAIT_MAX = 1.3; // Maximum trait multiplier
 
 // Spawning Settings
 export const FOOD_COST_TO_SPAWN = 10;
@@ -19,8 +24,8 @@ export const FOOD_COST_TO_SPAWN = 10;
 export const INITIAL_FOOD_SOURCES = 10;
 export const MIN_FOOD_PER_SOURCE = 50;
 export const MAX_FOOD_PER_SOURCE = 100;
-export const FOOD_RESPAWN_INTERVAL = 200; // frames - slower respawn
-export const MAX_FOOD_SOURCES = 50; // More food sources to support population
+export const FOOD_RESPAWN_INTERVAL = 600; // frames - slower respawn
+export const MAX_FOOD_SOURCES = 30; // More food sources to support population
 export const FOOD_MIN_DIST_FROM_COLONY = 150; // Minimum spawn distance from colony
 export const FOOD_PHER_AVOIDANCE_THRESHOLD = 15.0; // Only avoid VERY high foodPher areas
 export const FOOD_SPAWN_MARGIN = 50; // Keep food away from world edges
@@ -48,18 +53,20 @@ export const ANT_MAX_ACCEL = 20;      // units/s² (tune 10–40)
 export const ANT_MAX_TURN = Math.PI;  // rad/s (tune 2–6 for smoother)
 export const ANT_MIN_SPEED = 0.2;     // keep small floor to avoid "stall"
 export const ANT_HEADING_SMOOTHING = 0.5; // Temporal smoothing factor (0=no smoothing, 1=instant)
-export const ANT_STARTING_ENERGY = 200; // Starting energy per ant
+export const ANT_STARTING_ENERGY = 500; // Starting energy per ant (scaled for large worlds)
 export const ANT_ENERGY_DRAIN = 0.03; // Ants starve in ~2 minutes without food
 export const ANT_ENERGY_FROM_FOOD_PICKUP = 10; // Energy restored when finding food
 export const ANT_ENERGY_FROM_COLONY = 30; // Energy restored when returning to colony
+export const ANT_LOW_ENERGY_THRESHOLD = 100; // Energy level to trigger panic mode (abandon trails, beeline home)
 export const ANT_FOOD_PICKUP_RADIUS = 35; // Physical collision radius for picking up food (not vision range)
 export const ANT_SIZE = 5; // Visual size of ant sprite
-export const ANT_DIRECTION_INDICATOR_LENGTH = 8; // Length of direction line on ant
-export const ANT_SPAWN_DISTANCE = 35; // Distance from colony center to spawn ants
+export const ANT_DIRECTION_INDICATOR_LENGTH = 1; // Length of direction line on ant
+export const ANT_SPAWN_DISTANCE = 65; // Distance from colony center to spawn ants
 export const ANT_RENDER_INTERVAL = 10; // Render ant every N frames
 
 // Role-specific settings
 export const SCOUT_VISION_RANGE = 600; // Scouts see 2x farther than foragers (200)
+export const SCOUT_SMELL_RANGE = 1000; // Scouts can smell food from very far away
 export const FORAGER_VISION_RANGE = 200; // Standard forager vision
 export const SCOUT_SPAWN_RATIO = 0.2; // 20% of new ants are scouts
 export const SCOUT_HOMEPHER_STRENGTH = 4.0; // Scout trails persist longer (foragers use 1.0)
@@ -127,11 +134,16 @@ export const GRADIENT_MIN_THRESHOLD = 0.001; // G0 - ignore gradients below this
 export const GRADIENT_SPAN = 0.01; // Gspan - range to scale gradient influence
 
 // FOV Sensing (Phase 2 Task 6)
-export const FOV_RAY_COUNT = 5; // Number of rays to cast (3-5)
-export const FOV_ANGLE = Math.PI / 3; // 60 degrees total FOV
+export const FOV_RAY_COUNT = 5; // Number of rays to cast for foragers
+export const FOV_ANGLE = Math.PI / 3; // 60 degrees total FOV for foragers
 export const FOV_DISTANCE = 80; // How far rays extend
 export const FOV_ANGLE_TOLERANCE = 0.3; // Radians (~17 degrees) for food detection along ray
 export const FOV_OBSTACLE_DISTANCE_SAFETY = 0.8; // Multiplier for obstacle distance
+
+// Scout FOV Sensing (wider and more rays for better navigation)
+export const SCOUT_FOV_RAY_COUNT = 9; // More rays for better obstacle detection
+export const SCOUT_FOV_ANGLE = Math.PI; // 180 degrees - forward hemisphere
+export const SCOUT_FOV_DISTANCE = 300; // Scouts look further ahead for obstacle detection
 
 // Foraging behavior weights
 export const FORAGING_OBSTACLE_PENALTY = 3.0; // Score penalty for obstacles
@@ -165,15 +177,9 @@ export const RETURNING_OBSTACLE_REPULSION_WEIGHT = 0.2; // Weight for obstacle a
 export const OBSTACLE_REPULSION_CHECK_DISTANCE = 40; // Distance to check for nearby obstacles
 export const SCOUT_OBSTACLE_REPULSION_THRESHOLD = 1.5; // Only avoid if repulsion magnitude > this
 export const SCOUT_OBSTACLE_CORRECTION_WEIGHT = 0.3; // Light correction for scouts
-export const SCOUT_OBSTACLE_RESET_LEVY_THRESHOLD = 3.0; // Reset Lévy step if very close
 
-// Lévy walk (scouts)
-export const LEVY_WALK_MU = 1.7; // Power-law exponent for Lévy distribution
-export const LEVY_WALK_MIN_STEP = 50; // Minimum step length
-export const LEVY_WALK_MAX_STEP = 400; // Maximum step length
-export const LEVY_WALK_SCALE = 30; // Scale factor for distribution
-export const LEVY_COLONY_BIAS_DISTANCE = 800; // Distance threshold for colony avoidance bias
-export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in (removed hard gate)
+// Scout exploration
+export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in
 
 // Softmax selection
 export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning

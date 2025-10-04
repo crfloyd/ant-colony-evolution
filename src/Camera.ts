@@ -23,6 +23,10 @@ export class Camera {
   private lerpSpeed: number = 0.2; // How fast to interpolate (0-1, higher = faster)
   private panLerpSpeed: number = 0.5; // Faster lerp for panning to reduce jerkiness
 
+  // Follow target
+  private followTarget: { x: number; y: number } | null = null;
+  private followLerpSpeed: number = 0.1; // Smooth following
+
   constructor(container: Container) {
     this.container = container;
     this.targetX = container.x;
@@ -92,6 +96,9 @@ export class Camera {
         this.targetY += dy;
 
         this.dragStart = { x: e.clientX, y: e.clientY };
+
+        // Cancel follow mode when dragging
+        this.followTarget = null;
       }
     });
 
@@ -101,32 +108,39 @@ export class Camera {
   }
 
   public update(): void {
-    // Space bar to re-center
-    if (this.keys.has(' ')) {
-      if (this.recenterCallback) {
-        this.recenterCallback();
-        // Update targets to match new position after recenter
-        this.targetX = this.container.x;
-        this.targetY = this.container.y;
-        this.targetZoom = this.zoom;
-      }
-      this.keys.delete(' '); // Remove so it doesn't keep recentering
+    // If following a target, update camera position to track it
+    if (this.followTarget) {
+      const viewWidth = window.innerWidth;
+      const viewHeight = window.innerHeight;
+
+      // Calculate where target should be on screen (centered)
+      const targetScreenX = viewWidth / 2 - this.followTarget.x * this.zoom;
+      const targetScreenY = viewHeight / 2 - this.followTarget.y * this.zoom;
+
+      // Smoothly move toward target
+      this.targetX += (targetScreenX - this.targetX) * this.followLerpSpeed;
+      this.targetY += (targetScreenY - this.targetY) * this.followLerpSpeed;
     }
 
     // Arrow key movement - use constant speed for smooth consistent panning
+    // User input cancels follow mode
     const speed = this.moveSpeed;
 
     if (this.keys.has('ArrowUp') || this.keys.has('w') || this.keys.has('W')) {
       this.targetY += speed;
+      this.followTarget = null; // Cancel follow mode
     }
     if (this.keys.has('ArrowDown') || this.keys.has('s') || this.keys.has('S')) {
       this.targetY -= speed;
+      this.followTarget = null;
     }
     if (this.keys.has('ArrowLeft') || this.keys.has('a') || this.keys.has('A')) {
       this.targetX += speed;
+      this.followTarget = null;
     }
     if (this.keys.has('ArrowRight') || this.keys.has('d') || this.keys.has('D')) {
       this.targetX -= speed;
+      this.followTarget = null;
     }
 
     // Q and E for zoom - continuous zoom when held, zoom toward mouse position
@@ -200,5 +214,13 @@ export class Camera {
     const width = viewWidth / this.zoom;
     const height = viewHeight / this.zoom;
     return { x, y, width, height };
+  }
+
+  public followPosition(x: number, y: number): void {
+    this.followTarget = { x, y };
+  }
+
+  public stopFollowing(): void {
+    this.followTarget = null;
   }
 }

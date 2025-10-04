@@ -240,6 +240,31 @@ body {
   pointer-events: auto;
 }
 
+/* Trait Panel */
+#traitPanel {
+  position: absolute;
+  bottom: 20px;
+  right: 240px;
+  background: rgba(20, 20, 20, 0.9);
+  border: 2px solid rgba(200, 100, 255, 0.3);
+  border-radius: 12px;
+  padding: 15px;
+  min-width: 200px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+#traitPanel h3 {
+  color: #c864ff;
+  font-size: 1em;
+  margin-bottom: 12px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-weight: 600;
+}
+
 #metricsPanel h3 {
   color: #64c8ff;
   font-size: 1em;
@@ -278,18 +303,18 @@ body {
 /* Ant Debug Panel */
 #antDebugPanel {
   position: absolute;
-  top: 20px;
+  top: 140px;
   left: 20px;
   background: rgba(20, 20, 20, 0.95);
   border: 2px solid rgba(100, 200, 255, 0.4);
   border-radius: 12px;
-  padding: 15px;
-  width: 380px;
+  padding: 12px;
+  width: 280px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
   pointer-events: auto;
-  font-size: 0.85em;
-  max-height: 80vh;
+  font-size: 0.75em;
+  max-height: calc(70vh - 140px);
   overflow-y: auto;
 }
 
@@ -348,6 +373,30 @@ body {
   font-size: 0.9em;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+#antDebugContent details {
+  margin: 5px 0;
+}
+
+#antDebugContent summary {
+  list-style: none;
+  user-select: none;
+}
+
+#antDebugContent summary::-webkit-details-marker {
+  display: none;
+}
+
+#antDebugContent summary::before {
+  content: '▶ ';
+  display: inline-block;
+  transition: transform 0.2s;
+}
+
+#antDebugContent details[open] summary::before {
+  transform: rotate(90deg);
 }
 
 #antDebugContent .debug-warning {

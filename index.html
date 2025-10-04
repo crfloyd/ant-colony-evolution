@@ -25,8 +25,8 @@
             <span class="stat-value" id="spawnProgress">0/10</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">Gen</span>
-            <span class="stat-value" id="generation">1</span>
+            <span class="stat-label">Time</span>
+            <span class="stat-value" id="simTime">0:00</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">FPS</span>
@@ -45,6 +45,7 @@
         <!-- Utility Controls -->
         <div class="utility-controls">
           <button id="metricsBtn" class="util-btn">📊 Metrics</button>
+          <button id="traitViewBtn" class="util-btn">🧬 Traits</button>
           <button id="rockColliderBtn" class="util-btn">🎯 Colliders</button>
           <button id="debugBtn" class="util-btn">🔧 Debug</button>
         </div>
@@ -72,6 +73,23 @@
         <div class="metric"><span class="label">Foraging:</span> <span id="foragingPct">0%</span></div>
         <div class="metric"><span class="label">Returning:</span> <span id="returningPct">0%</span></div>
         <div class="metric"><span class="label">Food/Min:</span> <span id="foodPerMin">0</span></div>
+      </div>
+      <div id="traitPanel" style="display: none;">
+        <h3>Evolution Traits</h3>
+        <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px; font-style: italic;">
+          Population Averages
+        </div>
+        <div class="metric"><span class="label">🔴 Speed:</span> <span id="traitSpeed">1.00x</span> <span id="traitSpeedPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
+        <div class="metric"><span class="label">🔵 Vision:</span> <span id="traitVision">1.00x</span> <span id="traitVisionPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
+        <div class="metric"><span class="label">🟢 Efficiency:</span> <span id="traitEfficiency">1.00x</span> <span id="traitEfficiencyPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
+        <div class="metric"><span class="label">⚫ Carry:</span> <span id="traitCarry">1.00x</span> <span id="traitCarryPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
+        <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(200, 100, 255, 0.2); font-size: 0.7em; color: #999; line-height: 1.6;">
+          <strong style="color: #ff3333;">Red trail</strong> = High speed<br>
+          <strong style="color: #3366ff;">Blue cone</strong> = High vision<br>
+          <strong style="color: #33ff33;">Green pulse</strong> = High efficiency<br>
+          <strong>Larger size</strong> = High carry<br>
+          <span style="font-size: 0.9em; font-style: italic; opacity: 0.7;">Click ant to see traits</span>
+        </div>
       </div>
       <div id="antDebugPanel" style="display: none;">
         <h3>Ant Debug Info

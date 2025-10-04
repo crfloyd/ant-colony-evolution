@@ -378,7 +378,6 @@ export class PheromoneGrid {
   public markFoodSourceDepleted(foodSourceId: string): void {
     if (foodSourceId) {
       this.depletedFoodSources.add(foodSourceId);
-      console.log(`[Pheromone] Marking food source ${foodSourceId} as depleted - trails will decay faster`);
     }
   }
 }
