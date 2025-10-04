@@ -81,7 +81,7 @@ export const ANT_SAFE_DISTANCE_FROM_OBSTACLE = 20; // Safe push distance from ob
 export const ANT_STUCK_THRESHOLD = 1.0; // Seconds before ant triggers unstuck recovery (increased to allow counter to show)
 export const ANT_STUCK_BACKUP_DISTANCE = 10; // Distance to backup when stuck
 export const ANT_EMERGENCY_UNSTUCK_COUNT = 3; // Number of unstucks in window to trigger emergency mode
-export const ANT_EMERGENCY_UNSTUCK_WINDOW = 15; // Seconds to track unstuck history
+export const ANT_EMERGENCY_UNSTUCK_WINDOW = 6; // Seconds to track unstuck history
 export const ANT_EMERGENCY_MODE_DURATION = 10; // Seconds of random walk in emergency mode
 export const ANT_WORLD_BOUNDARY_MARGIN = 50; // Margin from world edges
 export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy drains
@@ -180,6 +180,9 @@ export const SCOUT_OBSTACLE_CORRECTION_WEIGHT = 0.3; // Light correction for sco
 
 // Scout exploration
 export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in
+export const SCOUT_EXPLORATION_COMMIT_DISTANCE = 3500; // Travel this far before picking new direction
+export const SCOUT_STUCK_TARGET_RESET_TIME = 5.0; // If stuck for 5 seconds, pick new target
+export const FORAGER_COMFORT_ZONE = 1500; // Don't pick targets inside forager territory
 
 // Softmax selection
 export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning

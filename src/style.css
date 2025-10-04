@@ -303,8 +303,8 @@ body {
 /* Ant Debug Panel */
 #antDebugPanel {
   position: absolute;
-  top: 140px;
-  left: 20px;
+  bottom: 20px;
+  right: 20px;
   background: rgba(20, 20, 20, 0.95);
   border: 2px solid rgba(100, 200, 255, 0.4);
   border-radius: 12px;
@@ -314,7 +314,7 @@ body {
   backdrop-filter: blur(10px);
   pointer-events: auto;
   font-size: 0.75em;
-  max-height: calc(70vh - 140px);
+  max-height: 60vh;
   overflow-y: auto;
 }
 

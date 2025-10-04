@@ -841,6 +841,16 @@ export class Game {
       }
     }
 
+    // Draw smell radius for scouts (faint yellow circle)
+    if (ant.role === 'SCOUT') {
+      this.selectionGraphics.circle(ant.position.x, ant.position.y, CONFIG.SCOUT_SMELL_RANGE * ant.traits.visionMultiplier);
+      this.selectionGraphics.stroke({ width: 2, color: 0xffff00, alpha: 0.15 });
+    }
+
+    // Draw forager comfort zone around colony (both scouts and foragers)
+    this.selectionGraphics.circle(this.colony.position.x, this.colony.position.y, CONFIG.FORAGER_COMFORT_ZONE);
+    this.selectionGraphics.stroke({ width: 3, color: 0x00ff00, alpha: 0.2 });
+
     // Draw goal line for scouts
     const explorationTarget = ant.getExplorationTarget?.();
     if (ant.role === 'SCOUT' && explorationTarget) {
@@ -1391,10 +1401,10 @@ Notes:
 
     const totalTime = performance.now() - perfStart;
 
-    // Log performance every 60 frames
-    if (this.app.ticker.FPS < 30 && Math.random() < 0.016) {
-      console.log('[PERF] Frame time:', totalTime.toFixed(2), 'ms', timings);
-    }
+    // Performance logging disabled
+    // if (this.app.ticker.FPS < 30 && Math.random() < 0.016) {
+    //   console.log('[PERF] Frame time:', totalTime.toFixed(2), 'ms', timings);
+    // }
   }
 
   private render(): void {
@@ -1406,7 +1416,8 @@ Notes:
     const elapsed = currentTime - this.fpsLastTime;
     if (elapsed >= 0.5 && currentTime > 1.0) { // Wait 1 second after page load, then update every 0.5s
       this.currentFPS = this.fpsFrameCount / elapsed;
-      console.log(`[FPS] Rendered ${this.fpsFrameCount} frames in ${elapsed.toFixed(2)}s = ${this.currentFPS.toFixed(1)} FPS`);
+      // FPS logging disabled
+      // console.log(`[FPS] Rendered ${this.fpsFrameCount} frames in ${elapsed.toFixed(2)}s = ${this.currentFPS.toFixed(1)} FPS`);
       this.fpsFrameCount = 0;
       this.fpsLastTime = currentTime;
     }

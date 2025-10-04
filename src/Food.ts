@@ -37,13 +37,13 @@ export class FoodSource implements Entity {
     const maxRadius = CONFIG.FOOD_MAX_RADIUS;
     const radius = minRadius + sizeRatio * (maxRadius - minRadius);
 
-    // Food pile (circle) - darker brown to stand out
+    // Food pile (circle) - bright red to stand out
     this.graphics.circle(0, 0, radius);
-    this.graphics.fill({ color: 0x8B4513, alpha: 0.9 }); // Saddle brown
+    this.graphics.fill({ color: 0xFF0000, alpha: 0.9 }); // Bright red
 
     // Highlight for 3D effect
     this.graphics.circle(-radius * 0.3, -radius * 0.3, radius * 0.4);
-    this.graphics.fill({ color: 0xD2691E, alpha: 0.6 }); // Chocolate highlight
+    this.graphics.fill({ color: 0xFF6666, alpha: 0.6 }); // Light red highlight
 
     // Shadow/depth
     this.graphics.circle(radius * 0.2, radius * 0.2, radius * 0.3);

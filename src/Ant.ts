@@ -644,6 +644,14 @@ public stuckCounter: number = 0;
           // GEOMETRIC TRAP DETECTED! Enter emergency mode
           this.emergencyModeTimer = CONFIG.ANT_EMERGENCY_MODE_DURATION;
 
+          // If this is a scout, abandon current target - it's unreachable
+          if (this.role === AntRole.SCOUT && this.explorationTarget) {
+            if (this.id === Ant.selectedAntId) {
+              console.log(`[EMERGENCY] Scout abandoning unreachable target due to geometric trap`);
+            }
+            this.explorationTarget = null;
+          }
+
           // Instead of random direction, use FOV to find clearest escape route
           // Cast rays in all directions to find the safest path
           const escapeRays: { angle: number; clearance: number }[] = [];
@@ -1469,6 +1477,10 @@ public stuckCounter: number = 0;
     const rays = this.senseEnvironment(foodSources, obstacleManager);
     const candidates: { angle: number; score: number }[] = [];
 
+    // Forager comfort zone: prefer staying within ~1500px of colony
+    const FORAGER_COMFORT_ZONE = 1500;
+    const outsideComfortZone = toColonyDist > FORAGER_COMFORT_ZONE;
+
     for (const ray of rays) {
       let score = 0;
 
@@ -1484,8 +1496,19 @@ public stuckCounter: number = 0;
         (rayEndX - this.colony.x) ** 2 + (rayEndY - this.colony.y) ** 2
       );
 
-      if (rayEndColonyDist > toColonyDist) {
-        score += CONFIG.FORAGING_EXPLORATION_BONUS;
+      // If outside comfort zone, bias toward directions that bring us closer to home
+      if (outsideComfortZone) {
+        // Bonus for directions that reduce distance to colony
+        if (rayEndColonyDist < toColonyDist) {
+          score += 0.8; // Strong bias toward home
+        } else {
+          score -= 0.4; // Penalty for going farther
+        }
+      } else {
+        // Inside comfort zone, slight bonus for exploring outward (normal behavior)
+        if (rayEndColonyDist > toColonyDist) {
+          score += CONFIG.FORAGING_EXPLORATION_BONUS;
+        }
       }
 
       score += (Math.random() - 0.5) * CONFIG.FORAGING_RANDOM_COMPONENT;
@@ -1611,20 +1634,64 @@ public stuckCounter: number = 0;
 
     // SCOUT EXPLORATION STRATEGY:
     // Pick random distant targets and commit to them - emergent spreading without phases
-    const SCOUT_EXPLORATION_COMMIT_DISTANCE = 2250; // Travel this far before picking new direction (50% longer)
+
+    // If scout is stuck for 5+ seconds, abandon current target and pick a new one
+    if (this.stuckCounter >= CONFIG.SCOUT_STUCK_TARGET_RESET_TIME && this.explorationTarget) {
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[Selected Ant] Scout stuck for ${this.stuckCounter.toFixed(1)}s - picking new exploration target`);
+      }
+      this.explorationTarget = null; // Clear stuck target
+      this.stuckCounter = 0; // Reset stuck counter when picking new target
+    }
 
     // Check if we need a new target (no target, or reached current target)
     if (!this.explorationTarget) {
-      // Pick a random direction and distance
-      const angle = Math.random() * Math.PI * 2;
-      const distance = SCOUT_EXPLORATION_COMMIT_DISTANCE;
-      this.explorationTarget = {
-        x: this.position.x + Math.cos(angle) * distance,
-        y: this.position.y + Math.sin(angle) * distance
-      };
+      // Pick a random direction and distance, ensuring target is beyond forager zone
+      let attempts = 0;
+      let validTarget = false;
 
-      if (this.id === Ant.selectedAntId) {
-        console.log(`[Selected Ant] Scout picked new exploration target at (${this.explorationTarget.x.toFixed(0)}, ${this.explorationTarget.y.toFixed(0)})`);
+      while (!validTarget && attempts < 10) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.SCOUT_EXPLORATION_COMMIT_DISTANCE;
+        const potentialTarget = {
+          x: this.position.x + Math.cos(angle) * distance,
+          y: this.position.y + Math.sin(angle) * distance
+        };
+
+        // Check if target is beyond forager comfort zone from colony
+        const targetDistFromColony = Math.sqrt(
+          (potentialTarget.x - this.colony.x) ** 2 +
+          (potentialTarget.y - this.colony.y) ** 2
+        );
+
+        // Check if target is inside an obstacle
+        let insideObstacle = false;
+        if (obstacleManager) {
+          const collision = obstacleManager.checkCollision(potentialTarget, 10);
+          if (collision) {
+            insideObstacle = true;
+          }
+        }
+
+        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle) {
+          this.explorationTarget = potentialTarget;
+          validTarget = true;
+
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Selected Ant] Scout picked new exploration target at (${this.explorationTarget.x.toFixed(0)}, ${this.explorationTarget.y.toFixed(0)}), ${targetDistFromColony.toFixed(0)}px from colony`);
+          }
+        }
+        attempts++;
+      }
+
+      // Fallback: if we couldn't find valid target after 10 attempts, just use the last attempt
+      if (!validTarget) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.SCOUT_EXPLORATION_COMMIT_DISTANCE;
+        this.explorationTarget = {
+          x: this.position.x + Math.cos(angle) * distance,
+          y: this.position.y + Math.sin(angle) * distance
+        };
       }
     }
 
@@ -1634,16 +1701,52 @@ public stuckCounter: number = 0;
     const targetDist = Math.sqrt(targetDx * targetDx + targetDy * targetDy);
 
     if (targetDist < 100) {
-      // Reached target - pick new one
-      const angle = Math.random() * Math.PI * 2;
-      const distance = SCOUT_EXPLORATION_COMMIT_DISTANCE;
-      this.explorationTarget = {
-        x: this.position.x + Math.cos(angle) * distance,
-        y: this.position.y + Math.sin(angle) * distance
-      };
+      // Reached target - pick new one beyond forager zone
+      let attempts = 0;
+      let validTarget = false;
 
-      if (this.id === Ant.selectedAntId) {
-        console.log(`[Selected Ant] Scout reached target, picking new one at (${this.explorationTarget.x.toFixed(0)}, ${this.explorationTarget.y.toFixed(0)})`);
+      while (!validTarget && attempts < 10) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.SCOUT_EXPLORATION_COMMIT_DISTANCE;
+        const potentialTarget = {
+          x: this.position.x + Math.cos(angle) * distance,
+          y: this.position.y + Math.sin(angle) * distance
+        };
+
+        // Check if target is beyond forager comfort zone from colony
+        const targetDistFromColony = Math.sqrt(
+          (potentialTarget.x - this.colony.x) ** 2 +
+          (potentialTarget.y - this.colony.y) ** 2
+        );
+
+        // Check if target is inside an obstacle
+        let insideObstacle = false;
+        if (obstacleManager) {
+          const collision = obstacleManager.checkCollision(potentialTarget, 10);
+          if (collision) {
+            insideObstacle = true;
+          }
+        }
+
+        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle) {
+          this.explorationTarget = potentialTarget;
+          validTarget = true;
+
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Selected Ant] Scout reached target, picking new one at (${this.explorationTarget.x.toFixed(0)}, ${this.explorationTarget.y.toFixed(0)}), ${targetDistFromColony.toFixed(0)}px from colony`);
+          }
+        }
+        attempts++;
+      }
+
+      // Fallback: if we couldn't find valid target after 10 attempts, just use the last attempt
+      if (!validTarget) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.SCOUT_EXPLORATION_COMMIT_DISTANCE;
+        this.explorationTarget = {
+          x: this.position.x + Math.cos(angle) * distance,
+          y: this.position.y + Math.sin(angle) * distance
+        };
       }
     }
 
@@ -1978,24 +2081,29 @@ public stuckCounter: number = 0;
       this.explorationCommitment = 0; // Reset exploration when returning to colony
       this.lastHomePheromoneDepositPos = null; // Reset for new foraging trail
 
-      // Push ant away from colony slightly to prevent clustering
-      if (dist > 0) {
-        // Direction away from colony (normalized) with random variation to disperse clumps
+      // Push ant away from colony to prevent clustering at center
+      let finalAngle: number;
+
+      if (dist > 5) {
+        // Far enough from center - use direction away from colony with random variation
         const baseAngle = Math.atan2(dy, dx);
         const randomSpread = (Math.random() - 0.5) * Math.PI * 0.5; // ±45° variation
-        const finalAngle = baseAngle + randomSpread;
-
-        const dirX = Math.cos(finalAngle);
-        const dirY = Math.sin(finalAngle);
-
-        // Give ant outward velocity to move away
-        this.velocity.x = dirX * this.maxSpeed;
-        this.velocity.y = dirY * this.maxSpeed;
-
-        // Set cooldown so ant keeps moving away before other behaviors interfere
-        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
-        this.stuckCounter = 0; // Reset stuck counter
+        finalAngle = baseAngle + randomSpread;
+      } else {
+        // Too close to center or at exact center - use completely random direction
+        finalAngle = Math.random() * Math.PI * 2;
       }
+
+      const dirX = Math.cos(finalAngle);
+      const dirY = Math.sin(finalAngle);
+
+      // Give ant outward velocity to move away
+      this.velocity.x = dirX * this.maxSpeed;
+      this.velocity.y = dirY * this.maxSpeed;
+
+      // Set cooldown so ant keeps moving away before other behaviors interfere
+      this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
+      this.stuckCounter = 0; // Reset stuck counter
 
       return deliveredAmount; // Return amount delivered
     }
