@@ -87,37 +87,126 @@ body {
   text-align: right;
 }
 
-/* Stats Bar - Clean horizontal layout */
-.stats-bar {
+/* Colony Stats Container */
+.colony-stats-container {
   display: flex;
-  gap: 20px;
+  gap: 12px;
+  align-self: flex-start;
+  pointer-events: auto;
+}
+
+.colony-card {
+  background: rgba(15, 15, 15, 0.9);
+  border-radius: 10px;
+  padding: 12px 16px;
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  min-width: 180px;
+  transition: all 0.2s ease;
+}
+
+.colony-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.black-colony {
+  border-color: rgba(100, 100, 100, 0.4);
+}
+
+.red-colony {
+  border-color: rgba(255, 100, 100, 0.4);
+}
+
+.colony-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.colony-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.black-colony .colony-indicator {
+  background: #666;
+  box-shadow: 0 0 8px #666;
+}
+
+.red-colony .colony-indicator {
+  background: #ff4444;
+  box-shadow: 0 0 8px #ff4444;
+}
+
+.colony-name {
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #ddd;
+}
+
+.colony-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stat-icon {
+  font-size: 1em;
+  width: 20px;
+  text-align: center;
+}
+
+.stat-value {
+  color: #64ff64;
+  font-size: 0.95em;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+}
+
+/* Game Info Bar */
+.game-info-bar {
+  display: flex;
+  gap: 16px;
   background: rgba(15, 15, 15, 0.85);
   border-radius: 8px;
-  padding: 12px 20px;
+  padding: 10px 16px;
   backdrop-filter: blur(10px);
   pointer-events: auto;
-  border: 1px solid rgba(100, 255, 100, 0.2);
+  border: 1px solid rgba(100, 255, 100, 0.15);
   align-self: flex-start;
 }
 
-.stat-item {
+.info-item {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 60px;
+  align-items: center;
+  gap: 6px;
 }
 
-.stat-label {
+.info-label {
   color: #888;
-  font-size: 0.7em;
+  font-size: 0.75em;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 500;
 }
 
-.stat-value {
+.info-value {
   color: #64ff64;
-  font-size: 1.1em;
+  font-size: 0.9em;
   font-weight: 700;
   font-family: 'Courier New', monospace;
 }
@@ -314,7 +403,7 @@ body {
   backdrop-filter: blur(10px);
   pointer-events: auto;
   font-size: 0.75em;
-  max-height: 60vh;
+  max-height: 80vh;
   overflow-y: auto;
 }
 
@@ -409,16 +498,16 @@ body {
   font-weight: 700;
 }
 
-/* Debug Panel */
+/* Settings Panel (formerly Debug Panel) */
 #debugPanel {
   position: absolute;
   bottom: 20px;
   left: 20px;
   background: rgba(20, 20, 20, 0.9);
   border: 2px solid rgba(255, 150, 100, 0.3);
-  border-radius: 12px;
-  padding: 12px;
-  min-width: 220px;
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 180px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
   pointer-events: auto;
@@ -426,8 +515,8 @@ body {
 
 #debugPanel h3 {
   color: #ff9664;
-  font-size: 0.9em;
-  margin-bottom: 10px;
+  font-size: 0.75em;
+  margin-bottom: 6px;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -435,17 +524,17 @@ body {
 }
 
 .debug-section {
-  margin: 10px 0;
-  padding: 8px;
+  margin: 6px 0;
+  padding: 5px;
   background: rgba(255, 150, 100, 0.05);
-  border-radius: 6px;
+  border-radius: 4px;
   border: 1px solid rgba(255, 150, 100, 0.15);
 }
 
 .debug-section h4 {
   color: #ff9664;
-  font-size: 0.75em;
-  margin-bottom: 8px;
+  font-size: 0.65em;
+  margin-bottom: 5px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 600;
@@ -453,14 +542,14 @@ body {
 }
 
 .debug-control {
-  margin: 6px 0;
+  margin: 4px 0;
 }
 
 .debug-control label {
   display: block;
   color: #ccc;
-  font-size: 0.8em;
-  margin-bottom: 4px;
+  font-size: 0.7em;
+  margin-bottom: 2px;
   font-weight: 500;
 }
 
@@ -469,6 +558,32 @@ body {
   color: #ff9664;
   font-weight: 700;
   font-family: 'Courier New', monospace;
+}
+
+/* Settings toggle button */
+.settings-toggle-btn {
+  width: 100%;
+  border: 1px solid rgba(255, 150, 100, 0.3);
+  background: rgba(30, 30, 30, 0.8);
+  color: #ccc;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 0.7em;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.settings-toggle-btn:hover {
+  border-color: #ff9664;
+  background: rgba(255, 150, 100, 0.1);
+}
+
+.settings-toggle-btn.active {
+  background: rgba(255, 150, 100, 0.15);
+  border-color: #ff9664;
+  color: #ff9664;
 }
 
 .debug-control input[type="range"] {
@@ -517,15 +632,16 @@ body {
 
 #respawnRocksBtn {
   width: 100%;
-  margin-top: 15px;
-  border: 2px solid rgba(255, 150, 100, 0.4);
+  margin-top: 8px;
+  border: 1px solid rgba(255, 150, 100, 0.4);
   background: rgba(30, 30, 30, 0.9);
   color: #ff9664;
-  padding: 12px;
-  border-radius: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+  font-size: 0.7em;
   cursor: pointer;
   transition: all 0.2s ease;
 }

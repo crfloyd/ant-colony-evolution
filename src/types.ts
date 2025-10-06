@@ -15,6 +15,15 @@ export enum AntState {
   RETURNING = 'RETURNING',
 }
 
+// Scout-specific state machine (Phase 1.3)
+export enum ScoutState {
+  EXPLORING = 'EXPLORING',
+  TAGGING_FOOD = 'TAGGING_FOOD',
+  GUARDING_FOOD = 'GUARDING_FOOD',
+  ASSISTING_GUARD = 'ASSISTING_GUARD',
+  RESPONDING_TO_DISTRESS = 'RESPONDING_TO_DISTRESS'
+}
+
 export interface Entity {
   position: Vector2;
   sprite: Container;

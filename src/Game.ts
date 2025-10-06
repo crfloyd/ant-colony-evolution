@@ -8,9 +8,14 @@ import { Metrics } from './Metrics';
 import { Ant } from './Ant';
 import * as CONFIG from './config';
 
-// Global ant sprite textures
+// Global ant sprite textures (black team)
 export let antSpriteTextures: Texture[] | null = null;
 export let scoutSpriteTextures: Texture[] | null = null;
+
+// Red team ant sprite textures
+export let antRedSpriteTextures: Texture[] | null = null;
+export let scoutRedSpriteTextures: Texture[] | null = null;
+
 export let colonyMoundTexture: Texture | null = null;
 export let groundTexture: Texture | null = null;
 export let groundClutterTextures: Texture[] = [];
@@ -31,7 +36,7 @@ export class Game {
   private staticContainer!: Container; // For ground and rocks
   private dynamicContainer!: Container; // For ants, food, colony
   private pheromoneGrid!: PheromoneGrid;
-  private colony!: Colony;
+  private colonies: Colony[] = [];
   private foodManager!: FoodManager;
   private obstacleManager!: ObstacleManager;
   private metrics!: Metrics;
@@ -49,61 +54,38 @@ export class Game {
   private worldWidth: number = CONFIG.WORLD_WIDTH;
   private worldHeight: number = CONFIG.WORLD_HEIGHT;
   private showRockColliders: boolean = false;
+  private showHomePher: boolean = false; // Home pheromone visibility (off by default)
   private selectedAnt: any = null;
   private selectionGraphics: Graphics | null = null;
   private mouseDownPos: { x: number; y: number } | null = null;
 
-  // UI elements
-  private antCountEl: HTMLElement;
-  private foodCountEl: HTMLElement;
-  private spawnProgressEl: HTMLElement;
+  // UI elements - Colony stats
+  private blackAntCountEl: HTMLElement;
+  private blackFoodCountEl: HTMLElement;
+  private blackKillsEl: HTMLElement;
+  private blackGenerationEl: HTMLElement;
+  private redAntCountEl: HTMLElement;
+  private redFoodCountEl: HTMLElement;
+  private redKillsEl: HTMLElement;
+  private redGenerationEl: HTMLElement;
   private simTimeEl: HTMLElement;
   private fpsEl: HTMLElement;
-
-  // Metrics UI elements
-  private tripsPerHourEl: HTMLElement;
-  private avgTripDistEl: HTMLElement;
-  private foragingPctEl: HTMLElement;
-  private returningPctEl: HTMLElement;
-  private foodPerMinEl: HTMLElement;
-
-  // Trait UI elements
-  private traitSpeedEl: HTMLElement;
-  private traitVisionEl: HTMLElement;
-  private traitEfficiencyEl: HTMLElement;
-  private traitCarryEl: HTMLElement;
-  private traitSpeedPctEl: HTMLElement;
-  private traitVisionPctEl: HTMLElement;
-  private traitEfficiencyPctEl: HTMLElement;
-  private traitCarryPctEl: HTMLElement;
 
   constructor(canvas: HTMLCanvasElement) {
     // Create PixiJS application
     this.app = new Application();
 
     // Initialize UI elements
-    this.antCountEl = document.getElementById('antCount')!;
-    this.foodCountEl = document.getElementById('foodCount')!;
-    this.spawnProgressEl = document.getElementById('spawnProgress')!;
+    this.blackAntCountEl = document.getElementById('blackAntCount')!;
+    this.blackFoodCountEl = document.getElementById('blackFoodCount')!;
+    this.blackKillsEl = document.getElementById('blackKills')!;
+    this.blackGenerationEl = document.getElementById('blackGeneration')!;
+    this.redAntCountEl = document.getElementById('redAntCount')!;
+    this.redFoodCountEl = document.getElementById('redFoodCount')!;
+    this.redKillsEl = document.getElementById('redKills')!;
+    this.redGenerationEl = document.getElementById('redGeneration')!;
     this.simTimeEl = document.getElementById('simTime')!;
     this.fpsEl = document.getElementById('fps')!;
-
-    // Initialize metrics UI elements
-    this.tripsPerHourEl = document.getElementById('tripsPerHour')!;
-    this.avgTripDistEl = document.getElementById('avgTripDist')!;
-    this.foragingPctEl = document.getElementById('foragingPct')!;
-    this.returningPctEl = document.getElementById('returningPct')!;
-    this.foodPerMinEl = document.getElementById('foodPerMin')!;
-
-    // Initialize trait UI elements
-    this.traitSpeedEl = document.getElementById('traitSpeed')!;
-    this.traitVisionEl = document.getElementById('traitVision')!;
-    this.traitEfficiencyEl = document.getElementById('traitEfficiency')!;
-    this.traitCarryEl = document.getElementById('traitCarry')!;
-    this.traitSpeedPctEl = document.getElementById('traitSpeedPct')!;
-    this.traitVisionPctEl = document.getElementById('traitVisionPct')!;
-    this.traitEfficiencyPctEl = document.getElementById('traitEfficiencyPct')!;
-    this.traitCarryPctEl = document.getElementById('traitCarryPct')!;
 
     // Start async initialization
     this.init(canvas).catch(err => {
@@ -178,6 +160,60 @@ export class Game {
       console.log(`Loaded ${textures.length} scout animation frames`);
     } catch (err) {
       console.error('Failed to load scout sprite sheet, using fallback to regular ant sprites:', err);
+    }
+
+    // Load red ant sprite sheet
+    console.log('Loading red ant sprite sheet...');
+    try {
+      const redSpriteSheet = await Assets.load('/ant-red.png');
+
+      // Create textures from 8x8 grid (62 frames used, skip last 2 blank frames)
+      const frameWidth = redSpriteSheet.width / 8;
+      const frameHeight = redSpriteSheet.height / 8;
+      const textures: Texture[] = [];
+
+      let frameCount = 0;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          if (frameCount >= 62) break; // Skip last 2 blank frames
+          const rect = new Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight);
+          textures.push(new Texture({ source: redSpriteSheet.source, frame: rect }));
+          frameCount++;
+        }
+        if (frameCount >= 62) break;
+      }
+
+      antRedSpriteTextures = textures;
+      console.log(`Loaded ${textures.length} red ant animation frames`);
+    } catch (err) {
+      console.error('Failed to load red ant sprite sheet, using fallback graphics:', err);
+    }
+
+    // Load red scout sprite sheet
+    console.log('Loading red scout sprite sheet...');
+    try {
+      const redScoutSpriteSheet = await Assets.load('/ant-red-scout.png');
+
+      // Create textures from 8x8 grid (62 frames used, skip last 2 blank frames)
+      const frameWidth = redScoutSpriteSheet.width / 8;
+      const frameHeight = redScoutSpriteSheet.height / 8;
+      const textures: Texture[] = [];
+
+      let frameCount = 0;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          if (frameCount >= 62) break; // Skip last 2 blank frames
+          const rect = new Rectangle(col * frameWidth, row * frameHeight, frameWidth, frameHeight);
+          textures.push(new Texture({ source: redScoutSpriteSheet.source, frame: rect }));
+          frameCount++;
+        }
+        if (frameCount >= 62) break;
+      }
+
+      scoutRedSpriteTextures = textures;
+      console.log(`Loaded ${textures.length} red scout animation frames`);
+    } catch (err) {
+      console.error('Failed to load red scout sprite sheet, using fallback to regular red ant sprites:', err);
     }
 
     // Load colony mound sprite
@@ -427,11 +463,11 @@ export class Game {
       );
     };
 
-    // Initial camera setup - use config zoom and center on colony
+    // Initial camera setup - use config zoom and center on black colony (bottom-right)
     this.camera.setZoom(CONFIG.CAMERA_START_ZOOM);
     this.camera.centerOn(
-      this.worldWidth / 2,
-      this.worldHeight / 2,
+      this.worldWidth * 0.75,
+      this.worldHeight * 0.75,
       this.app.screen.width,
       this.app.screen.height
     );
@@ -480,16 +516,33 @@ export class Game {
       savedSmallSpreadInit ? parseFloat(savedSmallSpreadInit) : undefined
     );
 
-    // Create colony at center (but don't spawn ants yet)
-    this.colony = new Colony(
-      { x: this.worldWidth / 2, y: this.worldHeight / 2 },
+    // Create black colony in bottom-right
+    const blackColony = new Colony(
+      { x: this.worldWidth * 0.75, y: this.worldHeight * 0.75 },
       this.pheromoneGrid,
       CONFIG.INITIAL_ANT_COUNT,
       this.worldWidth,
       this.worldHeight,
-      this.metrics
+      this.metrics,
+      antSpriteTextures,
+      scoutSpriteTextures
     );
-    this.dynamicContainer.addChild(this.colony.sprite);
+    this.colonies.push(blackColony);
+    this.dynamicContainer.addChild(blackColony.sprite);
+
+    // Create red colony in top-left
+    const redColony = new Colony(
+      { x: this.worldWidth * 0.25, y: this.worldHeight * 0.25 },
+      this.pheromoneGrid,
+      CONFIG.INITIAL_ANT_COUNT,
+      this.worldWidth,
+      this.worldHeight,
+      this.metrics,
+      antRedSpriteTextures,
+      scoutRedSpriteTextures
+    );
+    this.colonies.push(redColony);
+    this.dynamicContainer.addChild(redColony.sprite);
 
     // Initialize food manager (pass obstacles and pheromone grid for spawn avoidance)
     this.foodManager = new FoodManager(
@@ -498,20 +551,26 @@ export class Game {
       this.worldHeight,
       this.obstacleManager,
       this.pheromoneGrid,
-      () => this.colony.getAntCount()
+      () => {
+        // Return total ant count from all colonies
+        return this.colonies.reduce((total, colony) => total + colony.getAntCount(), 0);
+      },
+      () => {
+        // Return all colony positions for food spawn distance checking
+        return this.colonies.map(colony => colony.position);
+      }
     );
 
     // Now spawn initial ants (after rocks and food are ready)
-    this.colony.setWorldContainer(this.dynamicContainer);
+    this.colonies.forEach(colony => colony.setWorldContainer(this.dynamicContainer));
 
     // Draw world boundaries
     this.drawWorldBounds();
 
-    // Setup UI controls
+    // Setup UI controls (sets isPaused = false and configures pause button)
     this.setupUIControls();
 
-    // Start game loop (initially paused to prevent aging during load)
-    this.isPaused = true;
+    // Start game loop
     this.lastTime = performance.now() / 1000; // Initialize timer (in seconds)
     this.fpsLastTime = this.lastTime; // Initialize FPS timer
 
@@ -555,7 +614,8 @@ export class Game {
     });
 
     console.log('Game fully initialized!');
-    console.log('Colony ants:', this.colony.getAntCount());
+    console.log('Black colony ants:', this.colonies[0].getAntCount());
+    console.log('Red colony ants:', this.colonies[1].getAntCount());
     console.log('Food sources:', this.foodManager.getFoodSources().length);
     console.log('Click on any ant to see debug info');
   }
@@ -586,19 +646,20 @@ export class Game {
 
     console.log('Click at screen:', screenX.toFixed(0), screenY.toFixed(0), 'world:', worldX.toFixed(0), worldY.toFixed(0), 'zoom:', this.camera.zoom.toFixed(2));
 
-    // Find closest ant within 100 pixels (in world space)
-    const ants = this.colony.ants;
+    // Find closest ant within 100 pixels (in world space) from all colonies
     let closestAnt: any = null;
     let closestDist = 100;
 
-    for (const ant of ants) {
-      const dx = ant.position.x - worldX;
-      const dy = ant.position.y - worldY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+    for (const colony of this.colonies) {
+      for (const ant of colony.ants) {
+        const dx = ant.position.x - worldX;
+        const dy = ant.position.y - worldY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestAnt = ant;
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestAnt = ant;
+        }
       }
     }
 
@@ -611,6 +672,22 @@ export class Game {
       this.camera.followPosition(closestAnt.position.x, closestAnt.position.y);
     } else {
       console.log('No ant found within 100px');
+
+      // Deselect current ant if one is selected
+      if (this.selectedAnt) {
+        const panel = document.getElementById('antDebugPanel')!;
+        panel.style.display = 'none';
+        this.selectedAnt = null;
+        Ant.selectedAntId = null;
+        this.camera.stopFollowing();
+
+        // Clear selection graphics
+        if (this.selectionGraphics) {
+          this.selectionGraphics.clear();
+        }
+
+        console.log('Ant deselected');
+      }
     }
   }
 
@@ -728,6 +805,22 @@ export class Game {
         <span class="debug-label">Role:</span>
         <span class="debug-value">${ant.role === 'FORAGER' ? 'FORAGER' : 'SCOUT'}</span>
       </div>
+      ${ant.role === 'SCOUT' ? `
+      <div class="debug-row">
+        <span class="debug-label">Scout State:</span>
+        <span class="debug-value">${ant.scoutState}</span>
+      </div>
+      ${ant.guardingFoodId ? `
+      <div class="debug-row">
+        <span class="debug-label">Guarding Food:</span>
+        <span class="debug-value">${ant.guardingFoodId}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Guard Duration:</span>
+        <span class="debug-value">${((Date.now() - ant.guardStartTime) / 1000).toFixed(1)}s</span>
+      </div>
+      ` : ''}
+      ` : ''}
       <div class="debug-row">
         <span class="debug-label">Energy:</span>
         <span class="debug-value">${ant.energy.toFixed(1)} / ${ant.energyCapacity}</span>
@@ -847,8 +940,8 @@ export class Game {
       this.selectionGraphics.stroke({ width: 2, color: 0xffff00, alpha: 0.15 });
     }
 
-    // Draw forager comfort zone around colony (both scouts and foragers)
-    this.selectionGraphics.circle(this.colony.position.x, this.colony.position.y, CONFIG.FORAGER_COMFORT_ZONE);
+    // Draw forager comfort zone around ant's colony (both scouts and foragers)
+    this.selectionGraphics.circle(ant.colony.x, ant.colony.y, CONFIG.FORAGER_COMFORT_ZONE);
     this.selectionGraphics.stroke({ width: 3, color: 0x00ff00, alpha: 0.2 });
 
     // Draw goal line for scouts
@@ -928,8 +1021,8 @@ export class Game {
         // Get heading and colony direction
         const heading = Math.atan2(ant.velocity.y, ant.velocity.x);
         const headingDeg = (heading * 180 / Math.PI).toFixed(1);
-        const toColonyX = this.colony.position.x - ant.position.x;
-        const toColonyY = this.colony.position.y - ant.position.y;
+        const toColonyX = ant.colony.x - ant.position.x;
+        const toColonyY = ant.colony.y - ant.position.y;
         const colonyDist = Math.sqrt(toColonyX * toColonyX + toColonyY * toColonyY);
         const colonyAngle = Math.atan2(toColonyY, toColonyX);
         const colonyAngleDeg = (colonyAngle * 180 / Math.PI).toFixed(1);
@@ -1020,16 +1113,34 @@ Notes:
       });
     }
 
-    // Unstuck ant button
-    const unstuckAntBtn = document.getElementById('unstuckAntBtn');
-    if (unstuckAntBtn) {
-      unstuckAntBtn.addEventListener('click', () => {
-        if (!this.selectedAnt) return;
+    // Spray distress pheromone button (hold to spray)
+    const sprayDistressBtn = document.getElementById('sprayDistressBtn');
+    if (sprayDistressBtn) {
+      let sprayingDistress = false;
 
-        console.log('Manually triggering unstuck behavior...');
-        // Force stuck counter above threshold to trigger recovery
-        this.selectedAnt.stuckCounter = 0.3;
+      sprayDistressBtn.addEventListener('mousedown', () => {
+        if (!this.selectedAnt) return;
+        sprayingDistress = true;
+        sprayDistressBtn.style.background = '#ff0066';
+        sprayDistressBtn.style.color = '#ffffff';
+        console.log('Spraying distress pheromone...');
       });
+
+      sprayDistressBtn.addEventListener('mouseup', () => {
+        sprayingDistress = false;
+        sprayDistressBtn.style.background = '';
+        sprayDistressBtn.style.color = '';
+        console.log('Stopped spraying distress pheromone');
+      });
+
+      sprayDistressBtn.addEventListener('mouseleave', () => {
+        sprayingDistress = false;
+        sprayDistressBtn.style.background = '';
+        sprayDistressBtn.style.color = '';
+      });
+
+      // Store spraying state on the Game instance so update loop can access it
+      (this as any).sprayingDistress = () => sprayingDistress;
     }
 
     // Close ant debug panel
@@ -1149,6 +1260,16 @@ Notes:
         if (rockStats) {
           rockStats.style.display = isHidden ? 'block' : 'none';
         }
+      });
+    }
+
+    // Home pheromone visibility toggle
+    const toggleHomePherBtn = document.getElementById('toggleHomePherBtn');
+    if (toggleHomePherBtn) {
+      toggleHomePherBtn.addEventListener('click', () => {
+        this.showHomePher = !this.showHomePher;
+        toggleHomePherBtn.textContent = this.showHomePher ? '🏠 Home Pheromone: ON' : '🏠 Home Pheromone: OFF';
+        toggleHomePherBtn.classList.toggle('active', this.showHomePher);
       });
     }
 
@@ -1325,7 +1446,7 @@ Notes:
   }
 
   private gameLoop(deltaTime: number): void {
-    if (!this.colony) return;
+    if (!this.colonies || this.colonies.length === 0) return;
 
     // Use PixiJS deltaTime directly (it's already frame-rate independent)
     // deltaTime = 1.0 at 60 FPS, 2.0 at 30 FPS, 0.5 at 120 FPS
@@ -1355,10 +1476,18 @@ Notes:
     this.pheromoneGrid.update();
     timings.pheromoneUpdate = performance.now() - t;
 
+    // Spray distress pheromone if button is held (testing Phase 1.1)
+    if ((this as any).sprayingDistress && (this as any).sprayingDistress() && this.selectedAnt) {
+      this.pheromoneGrid.depositDistressPheromone(
+        this.selectedAnt.position.x,
+        this.selectedAnt.position.y
+      );
+    }
+
     // Get camera viewport for culling pheromone rendering
     t = performance.now();
     const viewportBounds = this.camera.getViewportBounds(window.innerWidth, window.innerHeight);
-    this.pheromoneGrid.render(true, true, viewportBounds);
+    this.pheromoneGrid.render(true, true, viewportBounds, this.showHomePher);
     timings.pheromoneRender = performance.now() - t;
 
     // Update food manager
@@ -1371,28 +1500,48 @@ Notes:
     this.obstacleManager.renderDebug(this.showRockColliders);
     timings.obstacleDebug = performance.now() - t;
 
-    // Update colony (pass food sources, obstacles, and viewport bounds for culling)
+    // Update all colonies (pass food sources, obstacles, viewport bounds, and enemy ants for combat)
     t = performance.now();
-    this.colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager, viewportBounds);
+    for (const colony of this.colonies) {
+      // Collect all ants from other colonies as enemies
+      const enemyAnts: any[] = [];
+      for (const otherColony of this.colonies) {
+        if (otherColony !== colony) {
+          enemyAnts.push(...otherColony.ants);
+        }
+      }
+
+      colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager, viewportBounds, enemyAnts);
+    }
     timings.colony = performance.now() - t;
 
-    // Track metrics for all ants
+    // Track metrics for all ants from all colonies
     t = performance.now();
-    for (const ant of this.colony.ants) {
-      this.metrics.recordStateTime(ant.state === 'FORAGING', adjustedDelta);
+    for (const colony of this.colonies) {
+      for (const ant of colony.ants) {
+        this.metrics.recordStateTime(ant.state === 'FORAGING', adjustedDelta);
+      }
     }
     timings.metrics = performance.now() - t;
 
-    // Check ant-food collisions (only for ants not carrying food)
+    // Check ant-food collisions (only for ants not carrying food) for all colonies
     t = performance.now();
-    for (const ant of this.colony.ants) {
-      if (!ant.hasFood) {
-        const nearbyFood = this.foodManager.checkCollisions(ant.position, CONFIG.ANT_FOOD_PICKUP_RADIUS);
-        if (nearbyFood) {
-          // Ant takes a chunk based on carrying capacity
-          const amountTaken = ant.checkFoodPickup(nearbyFood.position, CONFIG.ANT_FOOD_PICKUP_RADIUS, nearbyFood.id, nearbyFood.amount);
-          if (amountTaken > 0) {
-            nearbyFood.consume(amountTaken);
+    for (const colony of this.colonies) {
+      for (const ant of colony.ants) {
+        if (!ant.hasFood) {
+          const nearbyFood = this.foodManager.checkCollisions(ant.position, CONFIG.ANT_FOOD_PICKUP_RADIUS);
+          if (nearbyFood) {
+            // Ant takes a chunk based on carrying capacity (pass foodSource for scout tagging coordination)
+            const amountTaken = ant.checkFoodPickup(nearbyFood.position, CONFIG.ANT_FOOD_PICKUP_RADIUS, nearbyFood.id, nearbyFood.amount, nearbyFood);
+            if (amountTaken > 0) {
+              nearbyFood.consume(amountTaken);
+
+              // Update last forager visit timestamp for guards to track (Phase 2.3)
+              // Only count FORAGERS, not scouts (scouts are tagging, not harvesting)
+              if (ant.role === 'FORAGER') {
+                nearbyFood.updateLastForagerVisit(Date.now());
+              }
+            }
           }
         }
       }
@@ -1438,9 +1587,19 @@ Notes:
   }
 
   private updateUI(): void {
-    this.antCountEl.textContent = this.colony.getAntCount().toString();
-    this.foodCountEl.textContent = Math.floor(this.colony.foodStored).toString();
-    this.spawnProgressEl.textContent = `${Math.round(this.colony.foodStored * 10) / 10}/${CONFIG.FOOD_COST_TO_SPAWN}`;
+    // Update black colony stats
+    const blackColony = this.colonies[0];
+    this.blackAntCountEl.textContent = blackColony.getAntCount().toString();
+    this.blackFoodCountEl.textContent = Math.floor(blackColony.foodStored).toString();
+    this.blackKillsEl.textContent = blackColony.kills.toString();
+    this.blackGenerationEl.textContent = `Gen ${blackColony.generation}`;
+
+    // Update red colony stats
+    const redColony = this.colonies[1];
+    this.redAntCountEl.textContent = redColony.getAntCount().toString();
+    this.redFoodCountEl.textContent = Math.floor(redColony.foodStored).toString();
+    this.redKillsEl.textContent = redColony.kills.toString();
+    this.redGenerationEl.textContent = `Gen ${redColony.generation}`;
 
     // Format simulation time as M:SS
     const totalSeconds = Math.floor(this.simulationTime);
@@ -1449,29 +1608,6 @@ Notes:
     this.simTimeEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
     this.fpsEl.textContent = Math.round(this.currentFPS).toString();
-
-    // Update metrics (every 30 frames for performance)
-    if (this.frameCounter % 30 === 0) {
-      this.tripsPerHourEl.textContent = Math.round(this.metrics.getTripsPerHour()).toString();
-      this.avgTripDistEl.textContent = Math.round(this.metrics.getAverageTripDistance()).toString();
-      this.foragingPctEl.textContent = `${Math.round(this.metrics.getForagingPercentage())}%`;
-      this.returningPctEl.textContent = `${Math.round(this.metrics.getReturningPercentage())}%`;
-      this.foodPerMinEl.textContent = this.metrics.getFoodPerMinute().toFixed(1);
-
-      // Update trait averages
-      const avgTraits = this.colony.getAverageTraits();
-      this.traitSpeedEl.textContent = `${avgTraits.speedMultiplier.toFixed(3)}x`;
-      this.traitVisionEl.textContent = `${avgTraits.visionMultiplier.toFixed(3)}x`;
-      this.traitEfficiencyEl.textContent = `${avgTraits.efficiencyMultiplier.toFixed(3)}x`;
-      this.traitCarryEl.textContent = `${avgTraits.carryMultiplier.toFixed(3)}x`;
-
-      // Update trait percentages (% of ants with evolved traits)
-      const evolvedPct = this.colony.getEvolvedPercentages();
-      this.traitSpeedPctEl.textContent = `(${evolvedPct.speed}%)`;
-      this.traitVisionPctEl.textContent = `(${evolvedPct.vision}%)`;
-      this.traitEfficiencyPctEl.textContent = `(${evolvedPct.efficiency}%)`;
-      this.traitCarryPctEl.textContent = `(${evolvedPct.carry}%)`;
-    }
   }
 
   private onResize(): void {
@@ -1479,7 +1615,7 @@ Notes:
   }
 
   public destroy(): void {
-    this.colony.destroy();
+    this.colonies.forEach(colony => colony.destroy());
     this.foodManager.destroy();
     this.obstacleManager.destroy();
     this.app.destroy(true);

@@ -11,6 +11,12 @@ export class FoodSource implements Entity {
   private graphics: Graphics;
   private maxAmount: number;
 
+  // Guard tracking (Phase 1.2: Food Source Guard Tracking)
+  private guardsPresent: any[] = []; // Array of Ant references (using any to avoid circular dependency)
+  private scoutsTagging: any[] = []; // Scouts currently in TAGGING_FOOD state for this food
+  public lastForagerVisit: number = 0; // Timestamp of last forager visit
+  public claimedByColony: any | null = null; // Colony that claimed this food (using any to avoid circular dependency)
+
   constructor(position: Vector2, amount: number = 50) {
     this.id = Math.random().toString(36).substring(7); // Generate unique ID
     this.position = { ...position };
@@ -70,6 +76,74 @@ export class FoodSource implements Entity {
   public destroy(): void {
     this.sprite.destroy();
   }
+
+  // Guard tracking methods (Phase 1.2)
+  public registerGuard(ant: any): void {
+    if (!this.guardsPresent.includes(ant)) {
+      this.guardsPresent.push(ant);
+      // First guard claims the food for their colony
+      if (this.guardsPresent.length === 1 && ant.colony) {
+        this.claimedByColony = ant.colony;
+      }
+    }
+  }
+
+  public unregisterGuard(ant: any): void {
+    const index = this.guardsPresent.indexOf(ant);
+    if (index !== -1) {
+      this.guardsPresent.splice(index, 1);
+    }
+    // If no guards left, unclaim the food
+    if (this.guardsPresent.length === 0) {
+      this.claimedByColony = null;
+    }
+  }
+
+  public getGuardCount(): number {
+    return this.guardsPresent.length;
+  }
+
+  public getEnemyCount(colony: any): number {
+    // Count guards from different colonies
+    return this.guardsPresent.filter(guard => guard.colony !== colony).length;
+  }
+
+  public getGuards(): any[] {
+    return [...this.guardsPresent]; // Return copy to prevent external modification
+  }
+
+  public updateLastForagerVisit(timestamp: number): void {
+    this.lastForagerVisit = timestamp;
+  }
+
+  // Tagger tracking methods (limit scouts tagging same food)
+  // Returns true if registered successfully, false if already at max
+  public registerTagger(ant: any): boolean {
+    // Check if already at max BEFORE registering
+    if (this.scoutsTagging.length >= 2) {
+      return false; // At capacity, don't register
+    }
+
+    if (!this.scoutsTagging.includes(ant)) {
+      this.scoutsTagging.push(ant);
+    }
+    return true; // Successfully registered
+  }
+
+  public unregisterTagger(ant: any): void {
+    const index = this.scoutsTagging.indexOf(ant);
+    if (index !== -1) {
+      this.scoutsTagging.splice(index, 1);
+    }
+  }
+
+  public getTaggingCount(): number {
+    return this.scoutsTagging.length;
+  }
+
+  public getTaggers(): any[] {
+    return [...this.scoutsTagging]; // Return copy to prevent external modification
+  }
 }
 
 export class FoodManager {
@@ -81,14 +155,16 @@ export class FoodManager {
   private obstacleManager: any = null;
   private pheromoneGrid: any = null; // Phase 3 Task 15: Trail avoidance for food spawning
   private getColonySize: () => number;
+  private getColonyPositions: () => Vector2[];
 
-  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any, pheromoneGrid?: any, getColonySize?: () => number) {
+  constructor(container: Container, worldWidth: number, worldHeight: number, obstacleManager?: any, pheromoneGrid?: any, getColonySize?: () => number, getColonyPositions?: () => Vector2[]) {
     this.container = container;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.obstacleManager = obstacleManager;
     this.pheromoneGrid = pheromoneGrid;
     this.getColonySize = getColonySize || (() => 0);
+    this.getColonyPositions = getColonyPositions || (() => []);
 
     // Spawn initial food sources
     this.spawnInitialFood(CONFIG.INITIAL_FOOD_SOURCES);
@@ -101,26 +177,55 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // Random position, avoiding center (colony area), edges, obstacles, and very high pheromone trails
+    // 75% chance to spawn in center region, 25% chance to spawn anywhere
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
     const margin = CONFIG.FOOD_SPAWN_MARGIN; // Keep food away from edges so ants can reach it
+
+    // Determine spawn region based on 75% center bias
+    const spawnInCenter = Math.random() < 0.75;
+
+    // Center region is 50% of map dimensions (centered)
+    const centerRegionWidth = this.worldWidth * 0.5;
+    const centerRegionHeight = this.worldHeight * 0.5;
+    const centerMinX = centerX - centerRegionWidth / 2;
+    const centerMaxX = centerX + centerRegionWidth / 2;
+    const centerMinY = centerY - centerRegionHeight / 2;
+    const centerMaxY = centerY + centerRegionHeight / 2;
 
     let position: Vector2;
     let attempts = 0;
 
     do {
-      position = {
-        x: margin + Math.random() * (this.worldWidth - 2 * margin),
-        y: margin + Math.random() * (this.worldHeight - 2 * margin),
-      };
-
-      const dx = position.x - centerX;
-      const dy = position.y - centerY;
-      const distFromCenter = Math.sqrt(dx * dx + dy * dy);
+      if (spawnInCenter) {
+        // Spawn in center 50% region
+        position = {
+          x: centerMinX + Math.random() * centerRegionWidth,
+          y: centerMinY + Math.random() * centerRegionHeight,
+        };
+      } else {
+        // Spawn anywhere on map
+        position = {
+          x: margin + Math.random() * (this.worldWidth - 2 * margin),
+          y: margin + Math.random() * (this.worldHeight - 2 * margin),
+        };
+      }
 
       // Check if position is valid
       const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, CONFIG.FOOD_SPAWN_OBSTACLE_CHECK_RADIUS);
+
+      // Check distance from all colonies
+      const colonyPositions = this.getColonyPositions();
+      let tooCloseToColony = false;
+      for (const colonyPos of colonyPositions) {
+        const dx = position.x - colonyPos.x;
+        const dy = position.y - colonyPos.y;
+        const distFromColony = Math.sqrt(dx * dx + dy * dy);
+        if (distFromColony < CONFIG.FOOD_MIN_DIST_FROM_COLONY) {
+          tooCloseToColony = true;
+          break;
+        }
+      }
 
       // Check distance from other food sources
       let tooCloseToFood = false;
@@ -142,8 +247,8 @@ export class FoodManager {
         veryHighPheromone = foodPher > CONFIG.FOOD_PHER_AVOIDANCE_THRESHOLD;
       }
 
-      // Valid if: far enough from colony, not in obstacle, not near other food, not in super high pheromone area
-      const validDistance = distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY;
+      // Valid if: far enough from all colonies, not in obstacle, not near other food, not in super high pheromone area
+      const validDistance = !tooCloseToColony;
 
       if (validDistance && !inObstacle && !tooCloseToFood && !veryHighPheromone) {
         break;
@@ -151,8 +256,8 @@ export class FoodManager {
 
       attempts++;
       if (attempts > CONFIG.FOOD_SPAWN_MAX_ATTEMPTS_STRICT) {
-        // After many attempts, relax pheromone constraint (but still avoid obstacles, colony, and other food)
-        if (!inObstacle && distFromCenter >= CONFIG.FOOD_MIN_DIST_FROM_COLONY && !tooCloseToFood) {
+        // After many attempts, relax pheromone constraint (but still avoid obstacles, colonies, and other food)
+        if (!inObstacle && !tooCloseToColony && !tooCloseToFood) {
           break;
         }
       }
@@ -172,6 +277,28 @@ export class FoodManager {
   }
 
   public update(deltaTime: number): void {
+    // Clean up dead/invalid guards and taggers from all food sources (Phase 1.2)
+    for (const food of this.foodSources) {
+      const guards = food.getGuards();
+      for (const guard of guards) {
+        // Check if guard is dead or invalid
+        if (!guard || guard.energy <= 0 || !guard.isAlive) {
+          food.unregisterGuard(guard);
+        }
+      }
+
+      // Clean up taggers who died, are exploring, or switched to different food
+      // Keep them registered even in GUARDING_FOOD state (they already tagged)
+      const taggers = food.getTaggers();
+      for (const tagger of taggers) {
+        if (!tagger || tagger.energy <= 0 || !tagger.isAlive ||
+            tagger.scoutState === 'EXPLORING' ||
+            (tagger.guardingFoodId && tagger.guardingFoodId !== food.id)) {
+          food.unregisterTagger(tagger);
+        }
+      }
+    }
+
     // Remove depleted food sources and mark their trails for faster decay
     for (let i = this.foodSources.length - 1; i >= 0; i--) {
       if (this.foodSources[i].isEmpty()) {

@@ -1,4 +1,4 @@
-import { Container, Sprite } from 'pixi.js';
+import { Container, Sprite, Texture } from 'pixi.js';
 import { Entity, Vector2, AntRole, AntState } from './types';
 import { Ant, AntTraits, createDefaultTraits, mutateTraits, copyTraits } from './Ant';
 import { PheromoneGrid } from './PheromoneGrid';
@@ -18,6 +18,7 @@ export class Colony implements Entity {
   public foodStored: number = CONFIG.COLONY_STARTING_FOOD;
   public ants: Ant[] = [];
   public generation: number = 1;
+  public kills: number = 0; // Track enemy ants killed
 
   private moundSprite: Sprite | null = null;
   private pheromoneGrid: PheromoneGrid;
@@ -30,12 +31,27 @@ export class Colony implements Entity {
   private genePool: GenePoolEntry[] = [];
   private readonly MAX_GENE_POOL_SIZE = 100; // Keep pool from growing forever
 
-  constructor(position: Vector2, pheromoneGrid: PheromoneGrid, initialAnts: number = 20, worldWidth: number = 8000, worldHeight: number = 8000, metrics?: Metrics) {
+  // Sprite textures for this colony's ants
+  private foragerTextures: Texture[] | null = null;
+  private scoutTextures: Texture[] | null = null;
+
+  constructor(
+    position: Vector2,
+    pheromoneGrid: PheromoneGrid,
+    initialAnts: number = 20,
+    worldWidth: number = 8000,
+    worldHeight: number = 8000,
+    metrics?: Metrics,
+    foragerTextures?: Texture[] | null,
+    scoutTextures?: Texture[] | null
+  ) {
     this.position = { ...position };
     this.pheromoneGrid = pheromoneGrid;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.metrics = metrics || null;
+    this.foragerTextures = foragerTextures || null;
+    this.scoutTextures = scoutTextures || null;
 
     // Seed gene pool with some initial diversity
     this.seedGenePool();
@@ -108,12 +124,23 @@ export class Colony implements Entity {
       console.log(`Initial ant ${this.ants.length + 1} traits:`, traits);
     }
 
-    const ant = new Ant(spawnPos, this.position, this.pheromoneGrid, this.worldWidth, this.worldHeight, antRole, traits);
+    const ant = new Ant(
+      spawnPos,
+      this.position,
+      this.pheromoneGrid,
+      this.worldWidth,
+      this.worldHeight,
+      antRole,
+      traits,
+      this.foragerTextures,
+      this.scoutTextures,
+      () => this.recordKill() // Kill callback
+    );
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
   }
 
-  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, viewportBounds?: { x: number; y: number; width: number; height: number }): void {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, viewportBounds?: { x: number; y: number; width: number; height: number }, enemyAnts?: Ant[]): void {
     // Spawn new ant when enough food stored
     if (this.foodStored >= CONFIG.FOOD_COST_TO_SPAWN) {
       this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN;
@@ -123,7 +150,7 @@ export class Colony implements Entity {
     // Update all ants every frame
     for (let i = this.ants.length - 1; i >= 0; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime, foodSources, obstacleManager);
+      ant.update(deltaTime, foodSources, obstacleManager, enemyAnts);
 
       // Viewport culling - hide ants outside visible area (with padding for smooth transitions)
       if (viewportBounds) {
@@ -219,6 +246,10 @@ export class Colony implements Entity {
 
   public getAntCount(): number {
     return this.ants.length;
+  }
+
+  public recordKill(): void {
+    this.kills++;
   }
 
   /** Add traits to gene pool with performance-based weighting */

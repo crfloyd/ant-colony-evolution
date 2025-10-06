@@ -1,5 +1,5 @@
-import { Graphics, Container, AnimatedSprite, Sprite } from 'pixi.js';
-import { Entity, Vector2, AntRole, AntState } from './types';
+import { Graphics, Container, AnimatedSprite, Sprite, Texture } from 'pixi.js';
+import { Entity, Vector2, AntRole, AntState, ScoutState } from './types';
 import { PheromoneGrid } from './PheromoneGrid';
 import * as CONFIG from './config';
 import { antSpriteTextures, scoutSpriteTextures } from './Game';
@@ -77,7 +77,6 @@ export class Ant implements Entity {
   public traits: AntTraits;
 
   // Scout exploration state
-  private explorationDirection: number = 0; // Current wandering direction for scouts
   private explorationTarget: Vector2 | null = null; // Target position for committed exploration
   private smelledFoodId: string | null = null; // Food source being tracked by smell
   private lastSmellDistance: number = Infinity; // Last distance to smelled food
@@ -96,6 +95,7 @@ export class Ant implements Entity {
   private visionConeGraphics: Graphics | null = null; // Vision trait: cone showing vision range
   private efficiencyGlowGraphics: Graphics | null = null; // Efficiency trait: green glow
   private traitVisualsContainer: Container | null = null; // Container for all trait visuals
+  private combatIndicatorGraphics: Graphics | null = null; // Combat state indicator (red/blue circle)
 
   // Trail tracking for speed visualization
   private trailPositions: Array<{x: number, y: number}> = [];
@@ -147,6 +147,19 @@ public stuckCounter: number = 0;
   private explorationDirection: number = 0; // Current exploration heading
   private explorationCommitment: number = 0; // Time remaining to stick with current direction
 
+  // Combat system
+  private combatTarget: Ant | null = null; // Current enemy ant being fought
+  public isInCombat: boolean = false; // Combat state flag
+  public fleeing: boolean = false; // Flee state flag
+  public fleeDirection: number = 0; // Direction to flee
+  private onKillCallback: (() => void) | null = null; // Callback to notify colony of kills
+
+  // Scout state machine (Phase 1.3)
+  public scoutState: ScoutState = ScoutState.EXPLORING; // Current scout state (only used for scouts)
+  public guardingFoodId: string | null = null; // Food source ID being guarded
+  public guardStartTime: number = 0; // Timestamp when started guarding
+  public lastForagerSeen: number = 0; // Timestamp when last forager visited guarded food
+
   constructor(
     position: Vector2,
     colony: Vector2,
@@ -154,7 +167,10 @@ public stuckCounter: number = 0;
     worldWidth: number = 8000,
     worldHeight: number = 8000,
     role: AntRole = AntRole.FORAGER,
-    traits?: AntTraits  // Optional traits parameter
+    traits?: AntTraits,  // Optional traits parameter
+    foragerTextures?: Texture[] | null,  // Forager sprite textures
+    scoutTextures?: Texture[] | null,  // Scout sprite textures
+    onKill?: () => void  // Callback when this ant kills an enemy
   ) {
     this.position = { ...position };
     this.colony = colony;
@@ -162,12 +178,15 @@ public stuckCounter: number = 0;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.role = role;
+    this.onKillCallback = onKill || null;
 
     // Initialize traits (use provided or create default)
     this.traits = traits ? copyTraits(traits) : createDefaultTraits();
 
     // Apply trait multipliers to base stats
-    this.maxSpeed = CONFIG.ANT_MAX_SPEED * this.traits.speedMultiplier;
+    // Scouts are 20% faster than foragers (they're lighter and built for exploration)
+    const roleSpeedMultiplier = role === AntRole.SCOUT ? 1.2 : 1.0;
+    this.maxSpeed = CONFIG.ANT_MAX_SPEED * this.traits.speedMultiplier * roleSpeedMultiplier;
 
     // Set carry capacity based on role and traits
     // Scouts: 1 unit (light and fast)
@@ -184,7 +203,10 @@ public stuckCounter: number = 0;
     this.sprite = new Container();
 
     // Choose sprite sheet based on role
-    const spriteTextures = (role === AntRole.SCOUT && scoutSpriteTextures) ? scoutSpriteTextures : antSpriteTextures;
+    // Use provided textures or fall back to global ones
+    const spriteTextures = role === AntRole.SCOUT
+      ? (scoutTextures || scoutSpriteTextures)
+      : (foragerTextures || antSpriteTextures);
 
     if (spriteTextures && spriteTextures.length > 0) {
       // Use animated sprite
@@ -226,6 +248,10 @@ public stuckCounter: number = 0;
       // Create food graphics for when carrying
       this.foodGraphics = new Graphics();
       this.sprite.addChild(this.foodGraphics);
+
+      // Create combat indicator graphics (red/blue circle)
+      this.combatIndicatorGraphics = new Graphics();
+      this.sprite.addChild(this.combatIndicatorGraphics);
     } else {
       // Fallback to graphics rendering
       this.graphics = new Graphics();
@@ -394,6 +420,21 @@ public stuckCounter: number = 0;
       // Render trait visualizations when trait view is enabled
       this.renderTraitVisuals();
 
+      // Combat visual indicator - circle around ant
+      if (this.combatIndicatorGraphics) {
+        this.combatIndicatorGraphics.clear();
+
+        if (this.fleeing) {
+          // Blue circle for fleeing
+          this.combatIndicatorGraphics.circle(0, 0, 18);
+          this.combatIndicatorGraphics.stroke({ width: 3, color: 0x0088ff, alpha: 0.8 });
+        } else if (this.isInCombat) {
+          // Red circle for combat
+          this.combatIndicatorGraphics.circle(0, 0, 18);
+          this.combatIndicatorGraphics.stroke({ width: 3, color: 0xff0000, alpha: 0.8 });
+        }
+      }
+
       // Rotate sprite to match VISUAL heading (where ant wants to go, not micro-adjustments)
       // Add π/2 offset because sprite faces upward by default
       const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
@@ -441,6 +482,17 @@ public stuckCounter: number = 0;
         this.graphics.fill({ color: 0x8B4513, alpha: 0.9 }); // Brown food
       }
 
+      // Combat indicator circle
+      if (this.fleeing) {
+        // Blue circle for fleeing
+        this.graphics.circle(0, 0, size * 3);
+        this.graphics.stroke({ width: 2, color: 0x0088ff, alpha: 0.8 });
+      } else if (this.isInCombat) {
+        // Red circle for combat
+        this.graphics.circle(0, 0, size * 3);
+        this.graphics.stroke({ width: 2, color: 0xff0000, alpha: 0.8 });
+      }
+
       // Indicate direction with a small line (only if moving significantly)
       const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
       if (speed > 0.5) {
@@ -456,8 +508,13 @@ public stuckCounter: number = 0;
     }
   }
 
-  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, enemyAnts?: Ant[]): void {
     if (this.isDead) return;
+
+    // Combat detection and behavior (happens before other behaviors)
+    if (enemyAnts && enemyAnts.length > 0) {
+      this.handleCombat(deltaTime, enemyAnts);
+    }
 
     // Sanity check: if RETURNING with no food, reset to FORAGING
     // This shouldn't happen but fixes edge cases
@@ -516,9 +573,9 @@ public stuckCounter: number = 0;
       this.emergencyModeTimer = Math.max(0, this.emergencyModeTimer - deltaTime);
     }
 
-    // Process outputs (unless in cooldown period)
+    // Process outputs (unless in cooldown period or engaged in combat)
     // Using rule-based AI
-    if (this.justReturnedTimer <= 0) {
+    if (this.justReturnedTimer <= 0 && !this.fleeing && !this.isInCombat) {
       this.processOutputs(deltaTime, foodSources, obstacleManager);
     }
 
@@ -1527,6 +1584,171 @@ public stuckCounter: number = 0;
   }
 
 
+  /** Phase 2.3: GUARDING_FOOD state - Scout patrols and defends food source */
+  private updateGuardingFood(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // Find the food source we're guarding
+    const guardedFood = foodSources?.find((f: any) => f.id === this.guardingFoodId);
+
+    if (!guardedFood || guardedFood.amount <= 0) {
+      // Food depleted or not found - unregister and return to exploring
+      if (guardedFood) {
+        guardedFood.unregisterGuard(this);
+      }
+      this.guardingFoodId = null;
+      this.setScoutState(ScoutState.EXPLORING);
+      return;
+    }
+
+    // Register as guard if not already registered
+    guardedFood.registerGuard(this);
+
+    // Check if 60 seconds passed without foragers
+    const guardDuration = (Date.now() - this.guardStartTime) / 1000; // seconds
+    const timeSinceForager = guardedFood.lastForagerVisit > 0
+      ? (Date.now() - guardedFood.lastForagerVisit) / 1000
+      : guardDuration; // If never visited, use guard duration
+
+    if (this.id === Ant.selectedAntId && Math.random() < 0.02) {
+      console.log(`[Guard] Duration: ${guardDuration.toFixed(1)}s, Time since forager: ${timeSinceForager.toFixed(1)}s, Last visit: ${guardedFood.lastForagerVisit}, Guards: ${guardedFood.getGuardCount()}`);
+    }
+
+    if (timeSinceForager >= CONFIG.SCOUT_GUARD_TIMEOUT) {
+      // No foragers came - re-alert colony by taking 1 food and returning
+      if (guardedFood.amount > 0) {
+        // Pick up 1 food unit
+        this.carryingAmount = 1;
+        this.state = AntState.RETURNING;
+        this.hasFood = true;
+        this.foodSourceId = guardedFood.id;
+
+        // Unregister from guarding
+        guardedFood.unregisterGuard(this);
+        this.guardingFoodId = null;
+
+        // Transition back to TAGGING_FOOD to re-alert
+        this.setScoutState(ScoutState.TAGGING_FOOD);
+        return;
+      }
+    }
+
+    // Patrol in a ring around food source (150-350px from food)
+    const dx = guardedFood.position.x - this.position.x;
+    const dy = guardedFood.position.y - this.position.y;
+    const distToFood = Math.sqrt(dx * dx + dy * dy);
+
+    // Check if we need a new patrol target (no target, reached target, or too far from food)
+    const needNewTarget = !this.explorationTarget ||
+                          distToFood > CONFIG.SCOUT_GUARD_RADIUS ||
+                          Math.random() < 0.005; // 0.5% chance per frame to pick new target
+
+    if (needNewTarget) {
+      // Pick random patrol point in ring around food (between min and max patrol distance)
+      const randomAngle = Math.random() * Math.PI * 2;
+      const patrolDist = CONFIG.SCOUT_GUARD_PATROL_MIN +
+                         Math.random() * (CONFIG.SCOUT_GUARD_PATROL_MAX - CONFIG.SCOUT_GUARD_PATROL_MIN);
+
+      this.explorationTarget = {
+        x: guardedFood.position.x + Math.cos(randomAngle) * patrolDist,
+        y: guardedFood.position.y + Math.sin(randomAngle) * patrolDist
+      };
+    }
+
+    // Navigate toward patrol target
+    if (this.explorationTarget) {
+      const pdx = this.explorationTarget.x - this.position.x;
+      const pdy = this.explorationTarget.y - this.position.y;
+      const pdist = Math.sqrt(pdx * pdx + pdy * pdy);
+
+      // Check if reached target (within 50px)
+      if (pdist < 50) {
+        // Reached patrol point - pick new one next frame
+        this.explorationTarget = null;
+      } else {
+        // Move toward patrol target
+        const pdir = { x: pdx / pdist, y: pdy / pdist };
+        this.setDirection(pdir, deltaTime);
+      }
+    }
+  }
+
+  /** Phase 2.2: TAGGING_FOOD state - Scout returns to colony laying trail after finding food */
+  private updateTaggingFood(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // PRIORITY 1: Check for distress pheromone (emergency - drop everything)
+    const distressLevel = this.pheromoneGrid.getPheromoneLevel(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    if (distressLevel > CONFIG.DISTRESS_DETECTION_THRESHOLD) {
+      // Drop mission and respond to distress
+      this.guardingFoodId = null;
+      this.setScoutState(ScoutState.RESPONDING_TO_DISTRESS);
+      return;
+    }
+
+    // Navigate back to colony
+    const dx = this.colony.x - this.position.x;
+    const dy = this.colony.y - this.position.y;
+    const distToColony = Math.sqrt(dx * dx + dy * dy);
+
+    // Check if reached colony
+    if (distToColony < CONFIG.COLONY_RETURN_RADIUS) {
+      // Reached colony - transition to GUARDING_FOOD
+      this.setScoutState(ScoutState.GUARDING_FOOD);
+      this.guardStartTime = Date.now();
+      return;
+    }
+
+    // Deposit strong food pheromone trail as we return (uses existing system)
+    // The scout is creating a trail TO the food, so we deposit foodPher
+    const distanceSinceLastDeposit = this.lastFoodPheromoneDepositPos
+      ? Math.sqrt(
+          (this.position.x - this.lastFoodPheromoneDepositPos.x) ** 2 +
+          (this.position.y - this.lastFoodPheromoneDepositPos.y) ** 2
+        )
+      : Infinity;
+
+    if (distanceSinceLastDeposit >= CONFIG.PHEROMONE_DEPOSIT_DISTANCE) {
+      const trailStrength = CONFIG.PHEROMONE_SCOUT_STRENGTH_PER_UNIT * CONFIG.PHEROMONE_DEPOSIT_DISTANCE;
+      this.pheromoneGrid.depositPheromone(
+        this.position.x,
+        this.position.y,
+        'foodPher',
+        trailStrength,
+        this.guardingFoodId || undefined,
+        obstacleManager
+      );
+      this.lastFoodPheromoneDepositPos = { x: this.position.x, y: this.position.y };
+    }
+
+    // Head toward colony using existing returning behavior navigation
+    const dir = { x: dx / distToColony, y: dy / distToColony };
+    this.setDirection(dir, deltaTime);
+  }
+
+  /** Phase 2.1: EXPLORING state - Scout wanders with detection for food, guards, and distress */
+  private updateExploring(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // PRIORITY 1: Check for distress pheromone (highest priority - interrupts everything)
+    const distressLevel = this.pheromoneGrid.getPheromoneLevel(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    if (distressLevel > CONFIG.DISTRESS_DETECTION_THRESHOLD) {
+      // Transition to RESPONDING_TO_DISTRESS
+      this.setScoutState(ScoutState.RESPONDING_TO_DISTRESS);
+      return;
+    }
+
+    // PRIORITY 2: Use existing exploration behavior with food detection
+    // This will navigate toward food and pick it up via checkFoodPickup()
+    // When food is picked up, ant transitions to RETURNING state automatically
+    // We'll intercept that in checkFoodPickup() to also store the food ID for guarding
+    this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+  }
+
   /** SCOUT behavior - Simple directional exploration with smell */
   private updateScoutBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // PRIORITY 1: Check vision range for food (can see it directly)
@@ -1673,7 +1895,15 @@ public stuckCounter: number = 0;
           }
         }
 
-        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle) {
+        // Check if target is within world bounds (with margin)
+        const margin = CONFIG.ANT_WORLD_BOUNDARY_MARGIN;
+        const withinBounds =
+          potentialTarget.x >= margin &&
+          potentialTarget.x <= this.worldWidth - margin &&
+          potentialTarget.y >= margin &&
+          potentialTarget.y <= this.worldHeight - margin;
+
+        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle && withinBounds) {
           this.explorationTarget = potentialTarget;
           validTarget = true;
 
@@ -1728,7 +1958,15 @@ public stuckCounter: number = 0;
           }
         }
 
-        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle) {
+        // Check if target is within world bounds (with margin)
+        const margin = CONFIG.ANT_WORLD_BOUNDARY_MARGIN;
+        const withinBounds =
+          potentialTarget.x >= margin &&
+          potentialTarget.x <= this.worldWidth - margin &&
+          potentialTarget.y >= margin &&
+          potentialTarget.y <= this.worldHeight - margin;
+
+        if (targetDistFromColony > CONFIG.FORAGER_COMFORT_ZONE && !insideObstacle && withinBounds) {
           this.explorationTarget = potentialTarget;
           validTarget = true;
 
@@ -1984,14 +2222,35 @@ public stuckCounter: number = 0;
     } else {
       // FORAGING state - behavior depends on role
       if (this.role === AntRole.SCOUT) {
-        this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+        // Scouts use state machine (Phase 2)
+        switch (this.scoutState) {
+          case ScoutState.EXPLORING:
+            this.updateExploring(deltaTime, foodSources, obstacleManager);
+            break;
+          case ScoutState.TAGGING_FOOD:
+            this.updateTaggingFood(deltaTime, foodSources, obstacleManager);
+            break;
+          case ScoutState.GUARDING_FOOD:
+            this.updateGuardingFood(deltaTime, foodSources, obstacleManager);
+            break;
+          case ScoutState.ASSISTING_GUARD:
+            // TODO: Phase 4.2
+            this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+            break;
+          case ScoutState.RESPONDING_TO_DISTRESS:
+            // TODO: Phase 3.2
+            this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+            break;
+          default:
+            this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+        }
       } else {
         this.updateForagingBehavior(deltaTime, foodSources, obstacleManager);
       }
     }
   }
 
-  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string, amountAvailable: number = 1): number {
+  public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string, amountAvailable: number = 1, foodSource?: any): number {
     if (this.state === AntState.RETURNING) return 0; // Already carrying food
 
     const dx = this.position.x - foodPosition.x;
@@ -2024,9 +2283,38 @@ public stuckCounter: number = 0;
       this.trailLockTimer = 0; // Clear any existing lock - this was a good trail
       this.trailFollowDistance = 0;
 
-      // Scout found food: clear exploration target so it picks a new one after returning
+      // Scout found food: try to register as tagger (atomic check-and-register)
       if (this.role === AntRole.SCOUT) {
         this.explorationTarget = null;
+        this.guardingFoodId = foodSourceId || null;
+
+        // Try to register as tagger - returns false if already at max
+        const registeredAsTagger = foodSource ? foodSource.registerTagger(this) : true;
+
+        if (registeredAsTagger) {
+          // Successfully registered - proceed with tagging (pick up food and return)
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Scout] Registered as tagger for food ${foodSourceId} - will alert colony`);
+          }
+          this.setScoutState(ScoutState.TAGGING_FOOD);
+          // Continue with normal food pickup (state is RETURNING, carrying food)
+        } else {
+          // Already at max taggers - skip tagging and go straight to guarding
+          if (this.id === Ant.selectedAntId) {
+            console.log(`[Scout] Food ${foodSourceId} already has max taggers - going straight to guard`);
+          }
+
+          // DON'T pick up food - go straight to guarding
+          this.state = AntState.FORAGING; // Stay in foraging state (not returning)
+          this.hasFood = false;
+          this.carryingAmount = 0; // Don't carry food
+          this.foodSourceId = foodSourceId; // Remember which food we're guarding
+
+          this.setScoutState(ScoutState.GUARDING_FOOD);
+          this.guardStartTime = Date.now();
+
+          return 0; // Return 0 food taken (we didn't actually pick it up)
+        }
       }
 
       // Restore small amount of energy when finding food (Phase 3 Task 14)
@@ -2076,38 +2364,212 @@ public stuckCounter: number = 0;
       this.state = AntState.FORAGING;
       this.hasFood = false; // Keep for backward compatibility
       this.carryingAmount = 0; // Drop all food
-      this.foodSourceId = null; // Clear food source ID
+
+      // Scout special handling: transition to GUARDING_FOOD if in TAGGING_FOOD state
+      if (this.role === AntRole.SCOUT && this.scoutState === ScoutState.TAGGING_FOOD) {
+        // Keep guardingFoodId (don't clear it) and transition to guarding
+        this.setScoutState(ScoutState.GUARDING_FOOD);
+        this.guardStartTime = Date.now();
+        // Don't clear foodSourceId yet - we'll use it for guarding
+      } else {
+        this.foodSourceId = null; // Clear food source ID
+      }
+
       this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_COLONY); // Restore some energy
       this.explorationCommitment = 0; // Reset exploration when returning to colony
       this.lastHomePheromoneDepositPos = null; // Reset for new foraging trail
 
       // Push ant away from colony to prevent clustering at center
-      let finalAngle: number;
-
-      if (dist > 5) {
-        // Far enough from center - use direction away from colony with random variation
-        const baseAngle = Math.atan2(dy, dx);
-        const randomSpread = (Math.random() - 0.5) * Math.PI * 0.5; // ±45° variation
-        finalAngle = baseAngle + randomSpread;
+      // EXCEPT: scouts in GUARDING_FOOD state should head back to their food
+      if (this.role === AntRole.SCOUT && this.scoutState === ScoutState.GUARDING_FOOD) {
+        // Scout is going back to guard - don't push away, let normal behavior take over
+        this.justReturnedTimer = 0; // No cooldown - start guarding immediately
+        this.stuckCounter = 0; // Reset stuck counter
       } else {
-        // Too close to center or at exact center - use completely random direction
-        finalAngle = Math.random() * Math.PI * 2;
+        // Normal push-away behavior for foragers and other scouts
+        let finalAngle: number;
+
+        if (dist > 5) {
+          // Far enough from center - use direction away from colony with random variation
+          const baseAngle = Math.atan2(dy, dx);
+          const randomSpread = (Math.random() - 0.5) * Math.PI * 0.5; // ±45° variation
+          finalAngle = baseAngle + randomSpread;
+        } else {
+          // Too close to center or at exact center - use completely random direction
+          finalAngle = Math.random() * Math.PI * 2;
+        }
+
+        const dirX = Math.cos(finalAngle);
+        const dirY = Math.sin(finalAngle);
+
+        // Give ant outward velocity to move away
+        this.velocity.x = dirX * this.maxSpeed;
+        this.velocity.y = dirY * this.maxSpeed;
+
+        // Set cooldown so ant keeps moving away before other behaviors interfere
+        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
+        this.stuckCounter = 0; // Reset stuck counter
       }
-
-      const dirX = Math.cos(finalAngle);
-      const dirY = Math.sin(finalAngle);
-
-      // Give ant outward velocity to move away
-      this.velocity.x = dirX * this.maxSpeed;
-      this.velocity.y = dirY * this.maxSpeed;
-
-      // Set cooldown so ant keeps moving away before other behaviors interfere
-      this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
-      this.stuckCounter = 0; // Reset stuck counter
 
       return deliveredAmount; // Return amount delivered
     }
     return 0; // No food delivered
+  }
+
+  private handleCombat(deltaTime: number, enemyAnts: Ant[]): void {
+    // Debug: log enemy count for first call
+    if (this.id === Ant.selectedAntId && this.age < 5) {
+      console.log(`[Combat Init] ${enemyAnts.length} enemy ants in list`);
+    }
+
+    // Find nearest enemy ant within detection range
+    let nearestEnemy: Ant | null = null;
+    let nearestDistance = CONFIG.COMBAT_DETECTION_RANGE;
+
+    for (const enemy of enemyAnts) {
+      if (enemy.isDead) continue;
+
+      // Check if this ant belongs to a different colony
+      const dx = this.colony.x - enemy.colony.x;
+      const dy = this.colony.y - enemy.colony.y;
+      const colonyDist = Math.sqrt(dx * dx + dy * dy);
+
+      if (colonyDist < 10) continue; // Same colony, skip
+
+      // Debug: log first enemy check for selected ant
+      if (this.id === Ant.selectedAntId && nearestEnemy === null) {
+        console.log(`[Combat] Checking enemy - colonyDist: ${colonyDist.toFixed(0)}px`);
+      }
+
+      // Calculate distance to enemy
+      const ex = this.position.x - enemy.position.x;
+      const ey = this.position.y - enemy.position.y;
+      const dist = Math.sqrt(ex * ex + ey * ey);
+
+      if (dist < nearestDistance) {
+        nearestDistance = dist;
+        nearestEnemy = enemy;
+      }
+    }
+
+    // No enemies detected - clear combat state
+    if (!nearestEnemy) {
+      this.isInCombat = false;
+      this.combatTarget = null;
+      this.fleeing = false;
+      return;
+    }
+
+    // Enemy detected - decide behavior based on role and state
+    const isScout = this.role === AntRole.SCOUT;
+    const isForager = this.role === AntRole.FORAGER;
+    const isCarryingFood = this.carryingAmount > 0;
+    const lowEnergy = this.energy < CONFIG.COMBAT_FLEE_THRESHOLD;
+
+    // Debug: log enemy detection for selected ant
+    if (this.id === Ant.selectedAntId) {
+      console.log(`[Combat] Enemy detected at ${nearestDistance.toFixed(0)}px - Role: ${this.role}, Carrying: ${isCarryingFood}, Energy: ${this.energy.toFixed(0)}`);
+    }
+
+    // FORAGER behavior: Always flee unless cornered with food
+    if (isForager) {
+      // Always flee
+      this.fleeing = true;
+      this.fleeDirection = Math.atan2(
+        this.position.y - nearestEnemy.position.y,
+        this.position.x - nearestEnemy.position.x
+      );
+
+      // Override movement to flee
+      this.setDirection({ x: Math.cos(this.fleeDirection), y: Math.sin(this.fleeDirection) }, deltaTime);
+
+      // If in combat range and carrying food, fight desperately
+      if (nearestDistance < CONFIG.COMBAT_RANGE && isCarryingFood) {
+        this.engageInCombat(deltaTime, nearestEnemy);
+      }
+      return;
+    }
+
+    // SCOUT behavior: Engage in combat
+    if (isScout) {
+      // Flee if low energy
+      if (lowEnergy) {
+        this.fleeing = true;
+        this.fleeDirection = Math.atan2(
+          this.position.y - nearestEnemy.position.y,
+          this.position.x - nearestEnemy.position.x
+        );
+
+        // Override movement to flee
+        this.setDirection({ x: Math.cos(this.fleeDirection), y: Math.sin(this.fleeDirection) }, deltaTime);
+        return;
+      }
+
+      // Pursue and engage if within combat range
+      if (nearestDistance < CONFIG.COMBAT_RANGE) {
+        this.engageInCombat(deltaTime, nearestEnemy);
+      } else {
+        // Chase enemy (set isInCombat to prevent normal movement from overriding)
+        this.isInCombat = true; // Treat chasing as combat state
+        this.combatTarget = nearestEnemy;
+        const chaseDirection = Math.atan2(
+          nearestEnemy.position.y - this.position.y,
+          nearestEnemy.position.x - this.position.x
+        );
+        this.setDirection({ x: Math.cos(chaseDirection), y: Math.sin(chaseDirection) }, deltaTime);
+      }
+    }
+  }
+
+  private engageInCombat(deltaTime: number, enemy: Ant): void {
+    this.isInCombat = true;
+    this.combatTarget = enemy;
+    this.fleeing = false;
+
+    // Calculate damage dealt to enemy: damageDealt = BASE_COMBAT_DAMAGE * (yourSpeed / opponentEfficiency)
+    const myDamageMultiplier = this.maxSpeed / enemy.traits.efficiencyMultiplier;
+    const damageToEnemy = CONFIG.BASE_COMBAT_DAMAGE * myDamageMultiplier * deltaTime;
+
+    // Calculate damage received from enemy
+    const enemyDamageMultiplier = enemy.maxSpeed / this.traits.efficiencyMultiplier;
+    const damageFromEnemy = CONFIG.BASE_COMBAT_DAMAGE * enemyDamageMultiplier * deltaTime;
+
+    // Apply damage (both ants take damage simultaneously)
+    enemy.energy -= damageToEnemy;
+    this.energy -= damageFromEnemy;
+
+    // Check if enemy died
+    if (enemy.energy <= 0) {
+      enemy.isDead = true;
+
+      // Record kill for colony stats
+      if (this.onKillCallback) {
+        this.onKillCallback();
+      }
+
+      // Winner spoils: steal carried food and gain energy reward
+      if (enemy.carryingAmount > 0) {
+        this.carryingAmount = Math.min(this.carryCapacity, this.carryingAmount + enemy.carryingAmount);
+        this.state = AntState.RETURNING; // Switch to returning if we got food
+        enemy.carryingAmount = 0;
+      }
+
+      this.energy = Math.min(this.energyCapacity, this.energy + CONFIG.COMBAT_ENERGY_REWARD);
+      this.isInCombat = false;
+      this.combatTarget = null;
+    }
+
+    // Check if we died
+    if (this.energy <= 0) {
+      this.isDead = true;
+
+      // Drop food if carrying
+      if (this.carryingAmount > 0 && !enemy.isDead) {
+        enemy.carryingAmount = Math.min(enemy.carryCapacity, enemy.carryingAmount + this.carryingAmount);
+        enemy.state = AntState.RETURNING;
+        this.carryingAmount = 0;
+      }
+    }
   }
 
   private depenetrateIfInside(obstacle: any, radius: number): boolean {
@@ -2209,6 +2671,19 @@ public stuckCounter: number = 0;
 
   public getExplorationTarget(): Vector2 | null {
     return this.explorationTarget;
+  }
+
+  // Scout state management (Phase 1.3)
+  public setScoutState(newState: ScoutState): void {
+    if (this.role !== AntRole.SCOUT) {
+      console.warn(`Attempted to set scout state on non-scout ant (id: ${this.id})`);
+      return;
+    }
+
+    if (this.scoutState !== newState) {
+      console.log(`Scout ${this.id}: ${this.scoutState} → ${newState}`);
+      this.scoutState = newState;
+    }
   }
 
   public destroy(): void {

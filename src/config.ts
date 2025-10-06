@@ -75,6 +75,25 @@ export const SCOUT_CARRY_CAPACITY = 1; // Scouts carry 1 unit (light and fast)
 export const FORAGER_MIN_CARRY_CAPACITY = 1; // Minimum forager carry capacity
 export const FORAGER_MAX_CARRY_CAPACITY = 2; // Maximum forager carry capacity
 
+// Scout state detection ranges (Phase 2.1)
+export const SCOUT_FOOD_DETECTION_RANGE = 600; // Same as vision range
+export const SCOUT_GUARD_DETECTION_RANGE = 200; // Detect friendly guards
+export const SCOUT_DISTRESS_DETECTION_RANGE = 500; // Detect distress pheromone
+
+// Scout guarding behavior (Phase 2.3)
+export const SCOUT_GUARD_RADIUS = 400; // Stay within this distance of food while guarding (pixels)
+export const SCOUT_GUARD_PATROL_MIN = 150; // Minimum patrol distance from food (pixels)
+export const SCOUT_GUARD_PATROL_MAX = 350; // Maximum patrol distance from food (pixels)
+export const SCOUT_GUARD_TIMEOUT = 60; // Seconds to wait for foragers before re-alerting colony
+export const SCOUT_MAX_TAGGERS_PER_FOOD = 2; // Maximum scouts that should tag the same food source
+
+// Combat Settings
+export const COMBAT_RANGE = 20; // Distance to initiate combat (pixels)
+export const BASE_COMBAT_DAMAGE = 15; // Base energy drained per second in combat
+export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when energy drops below this
+export const COMBAT_ENERGY_REWARD = 10; // Energy gained for winning a fight
+export const COMBAT_DETECTION_RANGE = 150; // Distance to detect enemy ants (pixels)
+
 // Ant physics and collision
 export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
 export const ANT_SAFE_DISTANCE_FROM_OBSTACLE = 20; // Safe push distance from obstacles
@@ -104,12 +123,15 @@ export const PHEROMONE_CELL_SIZE = 20;
 // Decay rates (evaporation) - separate for each type
 // homePher half-life ≈ 3 min @ 20Hz → ρ ≈ 0.000193 (persistent "safe area map")
 // foodPher half-life ≈ 20s @ 20Hz → ρ ≈ 0.00347
+// distressPher half-life ≈ 5s @ 20Hz → ρ ≈ 0.1 (emergency signal, fast fade)
 export const PHEROMONE_HOME_DECAY_RATE = 0.000193; // Very slow decay - accumulates as safe area map
 export const PHEROMONE_FOOD_DECAY_RATE = 0.00347; // Faster decay for food trails
+export const PHEROMONE_DISTRESS_DECAY_RATE = 0.1; // Fast decay - distress signal fades quickly
 
 // Diffusion rates - separate for each type (much smaller than before)
 export const PHEROMONE_HOME_DIFFUSION_RATE = 0.01; // Minimal diffusion for home
 export const PHEROMONE_FOOD_DIFFUSION_RATE = 0.02; // Slightly more diffusion for food
+export const PHEROMONE_DISTRESS_DIFFUSION_RATE = 1.5; // Fast spread - distress floods outward
 
 export const PHEROMONE_MAX_LEVEL = 10; // Maximum pheromone concentration per cell
 export const PHEROMONE_MIN_THRESHOLD = 0.00001; // Minimum level before clearing (very small to avoid flicker)
@@ -119,8 +141,13 @@ export const PHEROMONE_RENDER_MIN_THRESHOLD = 0.003; // Minimum level to render 
 
 // Distance-based deposit settings (replaces frame-based deposits)
 export const PHEROMONE_DEPOSIT_DISTANCE = 5; // Deposit every N units traveled (5-6 units)
-export const PHEROMONE_SCOUT_STRENGTH_PER_UNIT = 0.05; // Scout homePher strength per unit distance
+export const PHEROMONE_SCOUT_STRENGTH_PER_UNIT = 0.75; // Scout foodPher strength per unit distance (15x stronger for long-distance trails)
 export const PHEROMONE_FORAGER_STRENGTH_PER_UNIT = 0.10; // Forager foodPher strength per unit distance (returning with food)
+
+// Distress pheromone settings (emergency signaling)
+export const DISTRESS_DEPOSIT_STRENGTH = 5.0; // High intensity per deposit (floods area)
+export const DISTRESS_DETECTION_THRESHOLD = 0.5; // Min level to detect distress
+export const DISTRESS_EMIT_RADIUS = 50; // Deposit in area around ant (pixels)
 
 export const PHEROMONE_FOOD_ALPHA_MAX = 0.15; // Max alpha for food pheromone visualization
 export const PHEROMONE_FOOD_ALPHA_DIVISOR = 20; // Divisor for food alpha calculation

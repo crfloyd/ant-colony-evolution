@@ -4,50 +4,91 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ant Colony Simulation</title>
+    <title>Ant Colony Wars</title>
   </head>
   <body>
     <div id="app">
       <canvas id="gameCanvas"></canvas>
       <div id="ui">
-        <!-- Top Stats Bar -->
-        <div class="stats-bar">
-          <div class="stat-item">
-            <span class="stat-label">Ants</span>
-            <span class="stat-value" id="antCount">0</span>
+        <!-- Colony Stats Container -->
+        <div class="colony-stats-container">
+          <!-- Black Colony -->
+          <div class="colony-card black-colony">
+            <div class="colony-header">
+              <span class="colony-indicator"></span>
+              <span class="colony-name">Black Colony</span>
+            </div>
+            <div class="colony-stats">
+              <div class="stat-row">
+                <span class="stat-icon">🐜</span>
+                <span class="stat-value" id="blackAntCount">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">🍎</span>
+                <span class="stat-value" id="blackFoodCount">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">⚔️</span>
+                <span class="stat-value" id="blackKills">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">📈</span>
+                <span class="stat-value" id="blackGeneration">Gen 1</span>
+              </div>
+            </div>
           </div>
-          <div class="stat-item">
-            <span class="stat-label">Food</span>
-            <span class="stat-value" id="foodCount">0</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Next Spawn</span>
-            <span class="stat-value" id="spawnProgress">0/10</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Time</span>
-            <span class="stat-value" id="simTime">0:00</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">FPS</span>
-            <span class="stat-value" id="fps">60</span>
+
+          <!-- Red Colony -->
+          <div class="colony-card red-colony">
+            <div class="colony-header">
+              <span class="colony-indicator"></span>
+              <span class="colony-name">Red Colony</span>
+            </div>
+            <div class="colony-stats">
+              <div class="stat-row">
+                <span class="stat-icon">🐜</span>
+                <span class="stat-value" id="redAntCount">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">🍎</span>
+                <span class="stat-value" id="redFoodCount">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">⚔️</span>
+                <span class="stat-value" id="redKills">0</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-icon">📈</span>
+                <span class="stat-value" id="redGeneration">Gen 1</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Playback Controls (Media Player Style) -->
+        <!-- Game Info Bar -->
+        <div class="game-info-bar">
+          <div class="info-item">
+            <span class="info-label">Time</span>
+            <span class="info-value" id="simTime">0:00</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">FPS</span>
+            <span class="info-value" id="fps">60</span>
+          </div>
+        </div>
+
+        <!-- Playback Controls -->
         <div class="playback-controls">
-          <button id="slowBtn" class="control-btn" title="Slow Down">&lt;&lt;</button>
+          <button id="slowBtn" class="control-btn" title="Slow Down">«</button>
           <button id="pauseBtn" class="control-btn primary" title="Play/Pause">▶</button>
-          <button id="fastBtn" class="control-btn" title="Speed Up">&gt;&gt;</button>
+          <button id="fastBtn" class="control-btn" title="Speed Up">»</button>
           <span class="speed-display" id="speedDisplay">1x</span>
         </div>
 
         <!-- Utility Controls -->
         <div class="utility-controls">
-          <button id="metricsBtn" class="util-btn">📊 Metrics</button>
-          <button id="traitViewBtn" class="util-btn">🧬 Traits</button>
-          <button id="rockColliderBtn" class="util-btn">🎯 Colliders</button>
-          <button id="debugBtn" class="util-btn">🔧 Debug</button>
+          <button id="rockColliderBtn" class="util-btn">🎯</button>
+          <button id="debugBtn" class="util-btn">🔧</button>
         </div>
 
         <!-- Rock Stats (shown only when debug panel is open) -->
@@ -66,42 +107,25 @@
           </div>
         </div>
       </div>
-      <div id="metricsPanel" style="display: none;">
-        <h3>Colony Metrics</h3>
-        <div class="metric"><span class="label">Trips/Hour:</span> <span id="tripsPerHour">0</span></div>
-        <div class="metric"><span class="label">Avg Trip Dist:</span> <span id="avgTripDist">0</span></div>
-        <div class="metric"><span class="label">Foraging:</span> <span id="foragingPct">0%</span></div>
-        <div class="metric"><span class="label">Returning:</span> <span id="returningPct">0%</span></div>
-        <div class="metric"><span class="label">Food/Min:</span> <span id="foodPerMin">0</span></div>
-      </div>
-      <div id="traitPanel" style="display: none;">
-        <h3>Evolution Traits</h3>
-        <div style="font-size: 0.8em; color: #aaa; margin-bottom: 8px; font-style: italic;">
-          Population Averages
-        </div>
-        <div class="metric"><span class="label">🔴 Speed:</span> <span id="traitSpeed">1.00x</span> <span id="traitSpeedPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
-        <div class="metric"><span class="label">🔵 Vision:</span> <span id="traitVision">1.00x</span> <span id="traitVisionPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
-        <div class="metric"><span class="label">🟢 Efficiency:</span> <span id="traitEfficiency">1.00x</span> <span id="traitEfficiencyPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
-        <div class="metric"><span class="label">⚫ Carry:</span> <span id="traitCarry">1.00x</span> <span id="traitCarryPct" style="color: #888; font-size: 0.85em;">(0%)</span></div>
-        <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(200, 100, 255, 0.2); font-size: 0.7em; color: #999; line-height: 1.6;">
-          <strong style="color: #ff3333;">Red trail</strong> = High speed<br>
-          <strong style="color: #3366ff;">Blue cone</strong> = High vision<br>
-          <strong style="color: #33ff33;">Green pulse</strong> = High efficiency<br>
-          <strong>Larger size</strong> = High carry<br>
-          <span style="font-size: 0.9em; font-style: italic; opacity: 0.7;">Click ant to see traits</span>
-        </div>
-      </div>
+
+      <!-- Ant Debug Panel -->
       <div id="antDebugPanel" style="display: none;">
         <h3>Ant Debug Info
           <button id="copyAntDebug" style="float: right; cursor: pointer; margin-left: 8px;">📋</button>
           <button id="closeAntDebug" style="float: right; cursor: pointer;">✕</button>
         </h3>
         <div id="antDebugContent"></div>
-        <button id="unstuckAntBtn" class="util-btn" style="width: 100%; margin-top: 10px; pointer-events: auto;">🔄 Trigger Unstuck</button>
+        <button id="sprayDistressBtn" class="util-btn" style="width: 100%; margin-top: 10px; pointer-events: auto;">💀 Spray Distress (Hold)</button>
       </div>
 
+      <!-- Settings Panel -->
       <div id="debugPanel" style="display: none;">
-        <h3>Rock Distribution</h3>
+        <h3>Settings</h3>
+
+        <div class="debug-section">
+          <h4>Visibility</h4>
+          <button id="toggleHomePherBtn" class="settings-toggle-btn">🏠 Home Pheromone: OFF</button>
+        </div>
 
         <div class="debug-section">
           <h4>Density</h4>
