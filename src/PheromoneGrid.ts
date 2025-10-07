@@ -2,9 +2,9 @@ import { Graphics, Container, BlurFilter } from 'pixi.js';
 import * as CONFIG from './config';
 
 interface PheromoneCell {
-  foodPher: number; // Laid while returning with food - leads TO food
-  homePher: number; // Laid while leaving colony - leads TO home
-  distressPher: number; // Emergency signal - floods outward, fades quickly
+  foodPher: [number, number]; // [colony0, colony1] - Laid while returning with food - leads TO food
+  homePher: [number, number]; // [colony0, colony1] - Laid while leaving colony - leads TO home
+  distressPher: number; // Emergency signal - floods outward, fades quickly (shared across colonies)
   foodSourceId: string | null; // Track which food source this trail leads to
 }
 
@@ -17,6 +17,8 @@ export class PheromoneGrid {
   private renderFrame: number = 0;
   private updateFrame: number = 0;
   private depletedFoodSources: Set<string> = new Set(); // Track depleted food sources for faster decay
+  private worldWidth: number;
+  private worldHeight: number;
 
   constructor(
     container: Container,
@@ -27,13 +29,15 @@ export class PheromoneGrid {
     this.width = Math.ceil(width / cellSize);
     this.height = Math.ceil(height / cellSize);
     this.cellSize = cellSize;
+    this.worldWidth = width;
+    this.worldHeight = height;
 
-    // Initialize grid
+    // Initialize grid with separate pheromone arrays for each colony
     this.grid = [];
     for (let y = 0; y < this.height; y++) {
       this.grid[y] = [];
       for (let x = 0; x < this.width; x++) {
-        this.grid[y][x] = { foodPher: 0, homePher: 0, distressPher: 0, foodSourceId: null };
+        this.grid[y][x] = { foodPher: [0, 0], homePher: [0, 0], distressPher: 0, foodSourceId: null };
       }
     }
 
@@ -50,6 +54,14 @@ export class PheromoneGrid {
     container.addChild(this.graphics);
   }
 
+  /** Helper to determine colony ID from colony position (0 or 1) */
+  private getColonyId(colonyPos: { x: number; y: number }): number {
+    // Black colony is at (0.75, 0.75) * worldSize - colony ID 0
+    // Red colony is at (0.25, 0.25) * worldSize - colony ID 1
+    // Use x coordinate to determine: x > 0.5 * worldWidth = colony 0, else colony 1
+    return colonyPos.x > this.worldWidth * 0.5 ? 0 : 1;
+  }
+
   /** Bilinear splat - deposit pheromone across 4 surrounding cells based on fractional position */
   public depositPheromone(
     x: number,
@@ -57,7 +69,8 @@ export class PheromoneGrid {
     type: 'foodPher' | 'homePher',
     amount: number = 1,
     foodSourceId?: string,
-    obstacleManager?: any
+    obstacleManager?: any,
+    colonyPos?: { x: number; y: number }
   ): void {
     // Convert world coordinates to grid coordinates (floating point)
     const gx = x / this.cellSize;
@@ -77,11 +90,14 @@ export class PheromoneGrid {
     const w01 = (1 - fx) * fy;
     const w11 = fx * fy;
 
+    // Determine colony ID
+    const colonyId = colonyPos ? this.getColonyId(colonyPos) : 0;
+
     // Deposit to 4 surrounding cells with weights
-    this.depositToCell(i, j, type, amount * w00, foodSourceId, obstacleManager);
-    this.depositToCell(i + 1, j, type, amount * w10, foodSourceId, obstacleManager);
-    this.depositToCell(i, j + 1, type, amount * w01, foodSourceId, obstacleManager);
-    this.depositToCell(i + 1, j + 1, type, amount * w11, foodSourceId, obstacleManager);
+    this.depositToCell(i, j, type, amount * w00, foodSourceId, obstacleManager, colonyId);
+    this.depositToCell(i + 1, j, type, amount * w10, foodSourceId, obstacleManager, colonyId);
+    this.depositToCell(i, j + 1, type, amount * w01, foodSourceId, obstacleManager, colonyId);
+    this.depositToCell(i + 1, j + 1, type, amount * w11, foodSourceId, obstacleManager, colonyId);
   }
 
   /** Deposit distress pheromone in a radius (floods outward) */
@@ -127,7 +143,8 @@ export class PheromoneGrid {
     type: 'foodPher' | 'homePher' | 'distressPher',
     amount: number,
     foodSourceId?: string,
-    obstacleManager?: any
+    obstacleManager?: any,
+    colonyId?: number
   ): void {
     if (!this.isValidCell(gridX, gridY)) return;
 
@@ -147,10 +164,20 @@ export class PheromoneGrid {
       }
     }
 
-    this.grid[gridY][gridX][type] = Math.min(
-      CONFIG.PHEROMONE_MAX_LEVEL,
-      this.grid[gridY][gridX][type] + amount
-    );
+    // Distress pheromone is shared across colonies (no colony ID)
+    if (type === 'distressPher') {
+      this.grid[gridY][gridX].distressPher = Math.min(
+        CONFIG.PHEROMONE_MAX_LEVEL,
+        this.grid[gridY][gridX].distressPher + amount
+      );
+    } else {
+      // Food and home pheromones are colony-specific
+      const cid = colonyId !== undefined ? colonyId : 0;
+      this.grid[gridY][gridX][type][cid] = Math.min(
+        CONFIG.PHEROMONE_MAX_LEVEL,
+        this.grid[gridY][gridX][type][cid] + amount
+      );
+    }
 
     // Set food source ID if provided (for food pheromones)
     if (type === 'foodPher' && foodSourceId) {
@@ -162,7 +189,8 @@ export class PheromoneGrid {
   public getPheromoneLevel(
     x: number,
     y: number,
-    type: 'foodPher' | 'homePher' | 'distressPher'
+    type: 'foodPher' | 'homePher' | 'distressPher',
+    colonyPos?: { x: number; y: number }
   ): number {
     // Convert to grid coordinates
     const gx = x / this.cellSize;
@@ -176,11 +204,25 @@ export class PheromoneGrid {
     const fx = gx - i;
     const fy = gy - j;
 
+    // Determine colony ID (only needed for food/home pheromones)
+    const colonyId = (type !== 'distressPher' && colonyPos) ? this.getColonyId(colonyPos) : 0;
+
     // Sample 4 surrounding cells
-    const v00 = this.isValidCell(i, j) ? this.grid[j][i][type] : 0;
-    const v10 = this.isValidCell(i + 1, j) ? this.grid[j][i + 1][type] : 0;
-    const v01 = this.isValidCell(i, j + 1) ? this.grid[j + 1][i][type] : 0;
-    const v11 = this.isValidCell(i + 1, j + 1) ? this.grid[j + 1][i + 1][type] : 0;
+    let v00 = 0, v10 = 0, v01 = 0, v11 = 0;
+
+    if (type === 'distressPher') {
+      // Distress is shared - read directly
+      v00 = this.isValidCell(i, j) ? this.grid[j][i].distressPher : 0;
+      v10 = this.isValidCell(i + 1, j) ? this.grid[j][i + 1].distressPher : 0;
+      v01 = this.isValidCell(i, j + 1) ? this.grid[j + 1][i].distressPher : 0;
+      v11 = this.isValidCell(i + 1, j + 1) ? this.grid[j + 1][i + 1].distressPher : 0;
+    } else {
+      // Food/home pheromones are colony-specific - read from array
+      v00 = this.isValidCell(i, j) ? this.grid[j][i][type][colonyId] : 0;
+      v10 = this.isValidCell(i + 1, j) ? this.grid[j][i + 1][type][colonyId] : 0;
+      v01 = this.isValidCell(i, j + 1) ? this.grid[j + 1][i][type][colonyId] : 0;
+      v11 = this.isValidCell(i + 1, j + 1) ? this.grid[j + 1][i + 1][type][colonyId] : 0;
+    }
 
     // Bilinear interpolation
     return (1 - fx) * (1 - fy) * v00 +
@@ -198,7 +240,8 @@ export class PheromoneGrid {
     x: number,
     y: number,
     type: 'foodPher' | 'homePher',
-    foodSourceId?: string
+    foodSourceId?: string,
+    colonyPos?: { x: number; y: number }
   ): { x: number; y: number } {
     // Convert to grid coordinates
     const gx = x / this.cellSize;
@@ -211,6 +254,9 @@ export class PheromoneGrid {
     // Get fractional part for bilinear interpolation
     const fx = gx - i;
     const fy = gy - j;
+
+    // Determine colony ID
+    const colonyId = colonyPos ? this.getColonyId(colonyPos) : 0;
 
     // Sample gradient at 4 surrounding cells and interpolate
     let gradX = 0;
@@ -227,14 +273,14 @@ export class PheromoneGrid {
         // Centered difference at this cell
         const inv2dx = 1 / (2 * this.cellSize);
 
-        // Right neighbor
-        const right = this.isValidCell(cellI + 1, cellJ) ? this.grid[cellJ][cellI + 1][type] : this.grid[cellJ][cellI][type];
+        // Right neighbor - read from colony-specific array
+        const right = this.isValidCell(cellI + 1, cellJ) ? this.grid[cellJ][cellI + 1][type][colonyId] : this.grid[cellJ][cellI][type][colonyId];
         // Left neighbor
-        const left = this.isValidCell(cellI - 1, cellJ) ? this.grid[cellJ][cellI - 1][type] : this.grid[cellJ][cellI][type];
+        const left = this.isValidCell(cellI - 1, cellJ) ? this.grid[cellJ][cellI - 1][type][colonyId] : this.grid[cellJ][cellI][type][colonyId];
         // Bottom neighbor
-        const bottom = this.isValidCell(cellI, cellJ + 1) ? this.grid[cellJ + 1][cellI][type] : this.grid[cellJ][cellI][type];
+        const bottom = this.isValidCell(cellI, cellJ + 1) ? this.grid[cellJ + 1][cellI][type][colonyId] : this.grid[cellJ][cellI][type][colonyId];
         // Top neighbor
-        const top = this.isValidCell(cellI, cellJ - 1) ? this.grid[cellJ - 1][cellI][type] : this.grid[cellJ][cellI][type];
+        const top = this.isValidCell(cellI, cellJ - 1) ? this.grid[cellJ - 1][cellI][type][colonyId] : this.grid[cellJ][cellI][type][colonyId];
 
         // Centered difference
         const gx_cell = (right - left) * inv2dx;
@@ -263,18 +309,22 @@ export class PheromoneGrid {
     this.updateFrame++;
     if (this.updateFrame % CONFIG.PHEROMONE_UPDATE_INTERVAL !== 0) return;
 
-    // Optimization 2: Use flat Float32Arrays instead of nested arrays for better memory access
+    // Optimization 2: Use flat Float32Arrays for each colony's pheromones
     const gridSize = this.width * this.height;
-    const tempFoodPher = new Float32Array(gridSize);
-    const tempHomePher = new Float32Array(gridSize);
-    const tempDistressPher = new Float32Array(gridSize);
+    const tempFoodPher0 = new Float32Array(gridSize); // Black colony food
+    const tempFoodPher1 = new Float32Array(gridSize); // Red colony food
+    const tempHomePher0 = new Float32Array(gridSize); // Black colony home
+    const tempHomePher1 = new Float32Array(gridSize); // Red colony home
+    const tempDistressPher = new Float32Array(gridSize); // Shared distress
 
     // Copy current state to temp arrays
     let idx = 0;
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
-        tempFoodPher[idx] = this.grid[y][x].foodPher;
-        tempHomePher[idx] = this.grid[y][x].homePher;
+        tempFoodPher0[idx] = this.grid[y][x].foodPher[0];
+        tempFoodPher1[idx] = this.grid[y][x].foodPher[1];
+        tempHomePher0[idx] = this.grid[y][x].homePher[0];
+        tempHomePher1[idx] = this.grid[y][x].homePher[1];
         tempDistressPher[idx] = this.grid[y][x].distressPher;
         idx++;
       }
@@ -289,17 +339,23 @@ export class PheromoneGrid {
     const D_distress = CONFIG.PHEROMONE_DISTRESS_DIFFUSION_RATE;
     const minThreshold = CONFIG.PHEROMONE_MIN_THRESHOLD;
 
+    // Helper to get flat array index
+    const getIdx = (gx: number, gy: number) => gy * this.width + gx;
+
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         const cell = this.grid[y][x];
+        const currentIdx = getIdx(x, y);
 
-        // Optimization 1: Early exit for near-zero cells
-        if (cell.foodPher < minThreshold &&
-            cell.homePher < minThreshold &&
+        // Optimization 1: Early exit for near-zero cells (check ALL pheromones)
+        if (cell.foodPher[0] < minThreshold && cell.foodPher[1] < minThreshold &&
+            cell.homePher[0] < minThreshold && cell.homePher[1] < minThreshold &&
             cell.distressPher < minThreshold) {
           // Cell already at minimum - zero it out and skip expensive calculations
-          cell.foodPher = 0;
-          cell.homePher = 0;
+          cell.foodPher[0] = 0;
+          cell.foodPher[1] = 0;
+          cell.homePher[0] = 0;
+          cell.homePher[1] = 0;
           cell.distressPher = 0;
           continue;
         }
@@ -309,8 +365,11 @@ export class PheromoneGrid {
         const isDepleted = cell.foodSourceId && this.depletedFoodSources.has(cell.foodSourceId);
         const effectiveFoodDecay = isDepleted ? rho_food * 10 : rho_food;
 
-        let foodValue = cell.foodPher * (1 - effectiveFoodDecay);
-        let homeValue = cell.homePher * (1 - rho_home);
+        // Process each colony's pheromones separately
+        let food0Value = cell.foodPher[0] * (1 - effectiveFoodDecay);
+        let food1Value = cell.foodPher[1] * (1 - effectiveFoodDecay);
+        let home0Value = cell.homePher[0] * (1 - rho_home);
+        let home1Value = cell.homePher[1] * (1 - rho_home);
 
         // Distress: concentration-dependent decay - higher concentration decays faster to prevent accumulation
         const distressConcentration = cell.distressPher / CONFIG.PHEROMONE_MAX_LEVEL;
@@ -318,66 +377,58 @@ export class PheromoneGrid {
         let distressValue = cell.distressPher * (1 - effectiveDistressDecay);
 
         // Optimization 3: Check if we need to calculate diffusion at all
-        // Helper to get flat array index
-        const getIdx = (gx: number, gy: number) => gy * this.width + gx;
-        const currentIdx = getIdx(x, y);
-
         // Peek at neighbors to see if diffusion is needed
         let hasNonZeroNeighbor = false;
-        if (this.isValidCell(x - 1, y) && tempFoodPher[getIdx(x - 1, y)] + tempHomePher[getIdx(x - 1, y)] + tempDistressPher[getIdx(x - 1, y)] > minThreshold) hasNonZeroNeighbor = true;
-        if (this.isValidCell(x + 1, y) && tempFoodPher[getIdx(x + 1, y)] + tempHomePher[getIdx(x + 1, y)] + tempDistressPher[getIdx(x + 1, y)] > minThreshold) hasNonZeroNeighbor = true;
-        if (this.isValidCell(x, y - 1) && tempFoodPher[getIdx(x, y - 1)] + tempHomePher[getIdx(x, y - 1)] + tempDistressPher[getIdx(x, y - 1)] > minThreshold) hasNonZeroNeighbor = true;
-        if (this.isValidCell(x, y + 1) && tempFoodPher[getIdx(x, y + 1)] + tempHomePher[getIdx(x, y + 1)] + tempDistressPher[getIdx(x, y + 1)] > minThreshold) hasNonZeroNeighbor = true;
+        const checkNeighbor = (nx: number, ny: number) => {
+          if (!this.isValidCell(nx, ny)) return;
+          const nIdx = getIdx(nx, ny);
+          if (tempFoodPher0[nIdx] + tempFoodPher1[nIdx] + tempHomePher0[nIdx] + tempHomePher1[nIdx] + tempDistressPher[nIdx] > minThreshold) {
+            hasNonZeroNeighbor = true;
+          }
+        };
+        checkNeighbor(x - 1, y);
+        checkNeighbor(x + 1, y);
+        checkNeighbor(x, y - 1);
+        checkNeighbor(x, y + 1);
 
         // Only calculate diffusion if cell or neighbors have significant pheromone
-        if (hasNonZeroNeighbor || foodValue > minThreshold || homeValue > minThreshold || distressValue > minThreshold) {
+        if (hasNonZeroNeighbor || food0Value > minThreshold || food1Value > minThreshold ||
+            home0Value > minThreshold || home1Value > minThreshold || distressValue > minThreshold) {
           // Diffusion: grid = (1 - D)*grid + D*avg(neighbors) - separate rates
-          // Calculate average of 4-connected neighbors
-          let foodNeighborSum = 0;
-          let homeNeighborSum = 0;
-          let distressNeighborSum = 0;
+          // Calculate average of 4-connected neighbors for each pheromone type
+          let food0Sum = 0, food1Sum = 0, home0Sum = 0, home1Sum = 0, distressSum = 0;
           let neighborCount = 0;
 
-          if (this.isValidCell(x - 1, y)) {
-            const nIdx = getIdx(x - 1, y);
-            foodNeighborSum += tempFoodPher[nIdx];
-            homeNeighborSum += tempHomePher[nIdx];
-            distressNeighborSum += tempDistressPher[nIdx];
+          const addNeighbor = (nx: number, ny: number) => {
+            if (!this.isValidCell(nx, ny)) return;
+            const nIdx = getIdx(nx, ny);
+            food0Sum += tempFoodPher0[nIdx];
+            food1Sum += tempFoodPher1[nIdx];
+            home0Sum += tempHomePher0[nIdx];
+            home1Sum += tempHomePher1[nIdx];
+            distressSum += tempDistressPher[nIdx];
             neighborCount++;
-          }
-          if (this.isValidCell(x + 1, y)) {
-            const nIdx = getIdx(x + 1, y);
-            foodNeighborSum += tempFoodPher[nIdx];
-            homeNeighborSum += tempHomePher[nIdx];
-            distressNeighborSum += tempDistressPher[nIdx];
-            neighborCount++;
-          }
-          if (this.isValidCell(x, y - 1)) {
-            const nIdx = getIdx(x, y - 1);
-            foodNeighborSum += tempFoodPher[nIdx];
-            homeNeighborSum += tempHomePher[nIdx];
-            distressNeighborSum += tempDistressPher[nIdx];
-            neighborCount++;
-          }
-          if (this.isValidCell(x, y + 1)) {
-            const nIdx = getIdx(x, y + 1);
-            foodNeighborSum += tempFoodPher[nIdx];
-            homeNeighborSum += tempHomePher[nIdx];
-            distressNeighborSum += tempDistressPher[nIdx];
-            neighborCount++;
-          }
+          };
+
+          addNeighbor(x - 1, y);
+          addNeighbor(x + 1, y);
+          addNeighbor(x, y - 1);
+          addNeighbor(x, y + 1);
 
           if (neighborCount > 0) {
-            const foodAvg = foodNeighborSum / neighborCount;
-            const homeAvg = homeNeighborSum / neighborCount;
-            const distressAvg = distressNeighborSum / neighborCount;
+            const food0Avg = food0Sum / neighborCount;
+            const food1Avg = food1Sum / neighborCount;
+            const home0Avg = home0Sum / neighborCount;
+            const home1Avg = home1Sum / neighborCount;
+            const distressAvg = distressSum / neighborCount;
 
-            // Apply separate diffusion rates
-            foodValue = (1 - D_food) * foodValue + D_food * foodAvg;
-            homeValue = (1 - D_home) * homeValue + D_home * homeAvg;
+            // Apply separate diffusion rates for each colony
+            food0Value = (1 - D_food) * food0Value + D_food * food0Avg;
+            food1Value = (1 - D_food) * food1Value + D_food * food1Avg;
+            home0Value = (1 - D_home) * home0Value + D_home * home0Avg;
+            home1Value = (1 - D_home) * home1Value + D_home * home1Avg;
 
             // Distress: concentration-dependent diffusion - higher concentration spreads faster
-            // Scale diffusion rate by concentration (0-1 normalized by max level)
             const concentrationFactor = tempDistressPher[currentIdx] / CONFIG.PHEROMONE_MAX_LEVEL;
             const effectiveDistressDiffusion = D_distress * (1.0 + concentrationFactor * 1.5); // Up to 2.5x diffusion at max concentration
             const clampedDiffusion = Math.min(0.95, effectiveDistressDiffusion); // Cap to prevent instability
@@ -385,14 +436,18 @@ export class PheromoneGrid {
           }
         }
 
-        this.grid[y][x].foodPher = foodValue;
-        this.grid[y][x].homePher = homeValue;
+        this.grid[y][x].foodPher[0] = food0Value;
+        this.grid[y][x].foodPher[1] = food1Value;
+        this.grid[y][x].homePher[0] = home0Value;
+        this.grid[y][x].homePher[1] = home1Value;
         // Cap distress at lower level to force spreading (40% of max)
         this.grid[y][x].distressPher = Math.min(distressValue, CONFIG.PHEROMONE_MAX_LEVEL * 0.4);
 
         // Remove very small values to avoid flicker
-        if (this.grid[y][x].foodPher < minThreshold) this.grid[y][x].foodPher = 0;
-        if (this.grid[y][x].homePher < minThreshold) this.grid[y][x].homePher = 0;
+        if (this.grid[y][x].foodPher[0] < minThreshold) this.grid[y][x].foodPher[0] = 0;
+        if (this.grid[y][x].foodPher[1] < minThreshold) this.grid[y][x].foodPher[1] = 0;
+        if (this.grid[y][x].homePher[0] < minThreshold) this.grid[y][x].homePher[0] = 0;
+        if (this.grid[y][x].homePher[1] < minThreshold) this.grid[y][x].homePher[1] = 0;
         if (this.grid[y][x].distressPher < minThreshold) this.grid[y][x].distressPher = 0;
       }
     }
@@ -427,16 +482,20 @@ export class PheromoneGrid {
       for (let x = minX; x < maxX; x++) {
         const cell = this.grid[y][x];
 
+        // Combine both colonies' pheromones for visual rendering
+        const totalFoodPher = cell.foodPher[0] + cell.foodPher[1];
+        const totalHomePher = cell.homePher[0] + cell.homePher[1];
+
         // Only render if there's a meaningful amount
-        if (cell.foodPher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD ||
-            cell.homePher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD ||
+        if (totalFoodPher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD ||
+            totalHomePher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD ||
             cell.distressPher > CONFIG.PHEROMONE_RENDER_MIN_THRESHOLD) {
           const worldX = x * this.cellSize;
           const worldY = y * this.cellSize;
 
           // Food pheromone is green (leads to food) - with glow proportional to concentration
           const foodAlpha = Math.min(CONFIG.PHEROMONE_FOOD_ALPHA_MAX,
-                                     cell.foodPher / CONFIG.PHEROMONE_FOOD_ALPHA_DIVISOR);
+                                     totalFoodPher / CONFIG.PHEROMONE_FOOD_ALPHA_DIVISOR);
           if (foodAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
             // Boost alpha for better visibility with glow
             const boostedFoodAlpha = Math.min(0.6, foodAlpha * 2);
@@ -446,12 +505,12 @@ export class PheromoneGrid {
 
           // Home pheromone - filter by scout/forager, with glow proportional to concentration
           if (showHomePher) {
-            const isScoutTrail = cell.homePher > scoutTrailThreshold;
+            const isScoutTrail = totalHomePher > scoutTrailThreshold;
             const shouldRenderHome = (isScoutTrail && showScoutTrails) || (!isScoutTrail && showForagerTrails);
 
             if (shouldRenderHome) {
               const homeAlpha = Math.min(CONFIG.PHEROMONE_HOME_ALPHA_MAX,
-                                         cell.homePher / CONFIG.PHEROMONE_HOME_ALPHA_DIVISOR);
+                                         totalHomePher / CONFIG.PHEROMONE_HOME_ALPHA_DIVISOR);
               if (homeAlpha > CONFIG.PHEROMONE_RENDER_MIN_ALPHA) {
                 // Boost alpha for better visibility with glow
                 const boostedHomeAlpha = Math.min(0.5, homeAlpha * 2);

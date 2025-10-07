@@ -622,7 +622,9 @@ public stuckCounter: number = 0;
           const gradient = this.pheromoneGrid.getPheromoneGradient(
             this.position.x,
             this.position.y,
-            'homePher'
+            'homePher',
+            undefined,
+            this.colony
           );
           const gradMag = Math.hypot(gradient.x, gradient.y);
 
@@ -837,7 +839,8 @@ public stuckCounter: number = 0;
             'foodPher',
             amount,
             this.foodSourceId,
-            obstacleManager
+            obstacleManager,
+            this.colony
           );
 
           // Update last deposit position
@@ -887,7 +890,8 @@ public stuckCounter: number = 0;
               'homePher',
               amount,
               undefined,
-              obstacleManager
+              obstacleManager,
+              this.colony
             );
 
             // Update last deposit position
@@ -990,8 +994,8 @@ public stuckCounter: number = 0;
     }
 
     // Sample pheromone levels at ray endpoint
-    result.foodPher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'foodPher');
-    result.homePher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'homePher');
+    result.foodPher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'foodPher', this.colony);
+    result.homePher = this.pheromoneGrid.getPheromoneLevel(endX, endY, 'homePher', this.colony);
 
     // Check for food visibility along ray
     if (foodSources) {
@@ -1413,7 +1417,7 @@ public stuckCounter: number = 0;
     }
 
     // PRIORITY 2: Follow pheromone trails with hysteresis (unless trail-locked)
-    const currentPher = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher');
+    const currentPher = this.pheromoneGrid.getPheromoneLevel(this.position.x, this.position.y, 'foodPher', this.colony);
 
     // Hysteresis: different thresholds for entering vs exiting trail mode
     if (!this.onFoodTrail) {
@@ -1468,7 +1472,7 @@ public stuckCounter: number = 0;
         const checkX = this.position.x + Math.cos(angle) * checkDist;
         const checkY = this.position.y + Math.sin(angle) * checkDist;
 
-        const pherLevel = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodPher');
+        const pherLevel = this.pheromoneGrid.getPheromoneLevel(checkX, checkY, 'foodPher', this.colony);
         const distToColony = Math.sqrt((checkX - this.colony.x) ** 2 + (checkY - this.colony.y) ** 2);
 
         // Score: high pheromone + moving away from colony
@@ -1717,7 +1721,8 @@ public stuckCounter: number = 0;
         'foodPher',
         trailStrength,
         this.guardingFoodId || undefined,
-        obstacleManager
+        obstacleManager,
+        this.colony
       );
       this.lastFoodPheromoneDepositPos = { x: this.position.x, y: this.position.y };
     }
@@ -2020,7 +2025,9 @@ public stuckCounter: number = 0;
     const gradient = this.pheromoneGrid.getPheromoneGradient(
       this.position.x,
       this.position.y,
-      'homePher'
+      'homePher',
+      undefined,
+      this.colony
     );
     const gradMag = Math.hypot(gradient.x, gradient.y);
 
@@ -2114,7 +2121,9 @@ public stuckCounter: number = 0;
     const gradient = this.pheromoneGrid.getPheromoneGradient(
       this.position.x,
       this.position.y,
-      'homePher'
+      'homePher',
+      undefined,
+      this.colony
     );
 
     // Compute gradient magnitude for weighting
