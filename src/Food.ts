@@ -177,15 +177,15 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // 75% chance to spawn in center region, 25% chance to spawn anywhere
+    // 65% chance to spawn in center region, 35% chance to spawn anywhere
     const centerX = this.worldWidth / 2;
     const centerY = this.worldHeight / 2;
     const margin = CONFIG.FOOD_SPAWN_MARGIN; // Keep food away from edges so ants can reach it
 
-    // Determine spawn region based on 75% center bias
-    const spawnInCenter = Math.random() < 0.75;
+    // Determine spawn region based on 65% center bias
+    const spawnInCenter = Math.random() < 0.65;
 
-    // Center region is 50% of map dimensions (centered)
+    // Center region is 50% of map dimensions (0.25 radius from center = 0.5 total width/height)
     const centerRegionWidth = this.worldWidth * 0.5;
     const centerRegionHeight = this.worldHeight * 0.5;
     const centerMinX = centerX - centerRegionWidth / 2;
