@@ -79,10 +79,15 @@ export class FoodSource implements Entity {
 
   // Guard tracking methods (Phase 1.2)
   public registerGuard(ant: any): void {
+    // Only allow guards from the same colony as the one that claimed the food
+    if (this.claimedByColony && ant.colony && this.claimedByColony !== ant.colony) {
+      return; // Enemy colony, don't register
+    }
+
     if (!this.guardsPresent.includes(ant)) {
       this.guardsPresent.push(ant);
-      // First guard claims the food for their colony
-      if (this.guardsPresent.length === 1 && ant.colony) {
+      // First guard claims the food if not already claimed by taggers
+      if (!this.claimedByColony && ant.colony) {
         this.claimedByColony = ant.colony;
       }
     }
@@ -93,8 +98,8 @@ export class FoodSource implements Entity {
     if (index !== -1) {
       this.guardsPresent.splice(index, 1);
     }
-    // If no guards left, unclaim the food
-    if (this.guardsPresent.length === 0) {
+    // If no guards AND no taggers left, unclaim the food
+    if (this.guardsPresent.length === 0 && this.scoutsTagging.length === 0) {
       this.claimedByColony = null;
     }
   }
@@ -117,11 +122,22 @@ export class FoodSource implements Entity {
   }
 
   // Tagger tracking methods (limit scouts tagging same food)
-  // Returns true if registered successfully, false if already at max
+  // Returns true if registered successfully, false if already at max or enemy colony
   public registerTagger(ant: any): boolean {
-    // Check if already at max BEFORE registering
-    if (this.scoutsTagging.length >= 2) {
-      return false; // At capacity, don't register
+    // First tagger claims the food for their colony
+    if (this.scoutsTagging.length === 0 && ant.colony) {
+      this.claimedByColony = ant.colony;
+    }
+
+    // Check if food is claimed by enemy colony
+    if (this.claimedByColony && ant.colony && this.claimedByColony !== ant.colony) {
+      return false; // Enemy colony owns this food
+    }
+
+    // Count taggers from the same colony only
+    const friendlyTaggers = this.scoutsTagging.filter(tagger => tagger.colony === ant.colony);
+    if (friendlyTaggers.length >= 2) {
+      return false; // At capacity for this colony
     }
 
     if (!this.scoutsTagging.includes(ant)) {
@@ -134,6 +150,10 @@ export class FoodSource implements Entity {
     const index = this.scoutsTagging.indexOf(ant);
     if (index !== -1) {
       this.scoutsTagging.splice(index, 1);
+    }
+    // If no taggers AND no guards left, unclaim the food
+    if (this.scoutsTagging.length === 0 && this.guardsPresent.length === 0) {
+      this.claimedByColony = null;
     }
   }
 
