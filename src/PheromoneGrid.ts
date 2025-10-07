@@ -263,19 +263,20 @@ export class PheromoneGrid {
     this.updateFrame++;
     if (this.updateFrame % CONFIG.PHEROMONE_UPDATE_INTERVAL !== 0) return;
 
-    // Create temporary grids for diffusion (to avoid in-place modification issues)
-    const tempFoodPher: number[][] = [];
-    const tempHomePher: number[][] = [];
-    const tempDistressPher: number[][] = [];
+    // Optimization 2: Use flat Float32Arrays instead of nested arrays for better memory access
+    const gridSize = this.width * this.height;
+    const tempFoodPher = new Float32Array(gridSize);
+    const tempHomePher = new Float32Array(gridSize);
+    const tempDistressPher = new Float32Array(gridSize);
 
+    // Copy current state to temp arrays
+    let idx = 0;
     for (let y = 0; y < this.height; y++) {
-      tempFoodPher[y] = [];
-      tempHomePher[y] = [];
-      tempDistressPher[y] = [];
       for (let x = 0; x < this.width; x++) {
-        tempFoodPher[y][x] = this.grid[y][x].foodPher;
-        tempHomePher[y][x] = this.grid[y][x].homePher;
-        tempDistressPher[y][x] = this.grid[y][x].distressPher;
+        tempFoodPher[idx] = this.grid[y][x].foodPher;
+        tempHomePher[idx] = this.grid[y][x].homePher;
+        tempDistressPher[idx] = this.grid[y][x].distressPher;
+        idx++;
       }
     }
 
@@ -286,12 +287,25 @@ export class PheromoneGrid {
     const D_food = CONFIG.PHEROMONE_FOOD_DIFFUSION_RATE;
     const D_home = CONFIG.PHEROMONE_HOME_DIFFUSION_RATE;
     const D_distress = CONFIG.PHEROMONE_DISTRESS_DIFFUSION_RATE;
+    const minThreshold = CONFIG.PHEROMONE_MIN_THRESHOLD;
 
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
+        const cell = this.grid[y][x];
+
+        // Optimization 1: Early exit for near-zero cells
+        if (cell.foodPher < minThreshold &&
+            cell.homePher < minThreshold &&
+            cell.distressPher < minThreshold) {
+          // Cell already at minimum - zero it out and skip expensive calculations
+          cell.foodPher = 0;
+          cell.homePher = 0;
+          cell.distressPher = 0;
+          continue;
+        }
+
         // Evaporation: grid *= (1 - rho) - separate rates for food/home
         // Apply accelerated decay (10x faster) for depleted food sources
-        const cell = this.grid[y][x];
         const isDepleted = cell.foodSourceId && this.depletedFoodSources.has(cell.foodSourceId);
         const effectiveFoodDecay = isDepleted ? rho_food * 10 : rho_food;
 
@@ -303,53 +317,72 @@ export class PheromoneGrid {
         const effectiveDistressDecay = rho_distress * (1.0 + distressConcentration * 1.5); // Up to 2.5x decay at max concentration
         let distressValue = cell.distressPher * (1 - effectiveDistressDecay);
 
-        // Diffusion: grid = (1 - D)*grid + D*avg(neighbors) - separate rates
-        // Calculate average of 4-connected neighbors
-        let foodNeighborSum = 0;
-        let homeNeighborSum = 0;
-        let distressNeighborSum = 0;
-        let neighborCount = 0;
+        // Optimization 3: Check if we need to calculate diffusion at all
+        // Helper to get flat array index
+        const getIdx = (gx: number, gy: number) => gy * this.width + gx;
+        const currentIdx = getIdx(x, y);
 
-        if (this.isValidCell(x - 1, y)) {
-          foodNeighborSum += tempFoodPher[y][x - 1];
-          homeNeighborSum += tempHomePher[y][x - 1];
-          distressNeighborSum += tempDistressPher[y][x - 1];
-          neighborCount++;
-        }
-        if (this.isValidCell(x + 1, y)) {
-          foodNeighborSum += tempFoodPher[y][x + 1];
-          homeNeighborSum += tempHomePher[y][x + 1];
-          distressNeighborSum += tempDistressPher[y][x + 1];
-          neighborCount++;
-        }
-        if (this.isValidCell(x, y - 1)) {
-          foodNeighborSum += tempFoodPher[y - 1][x];
-          homeNeighborSum += tempHomePher[y - 1][x];
-          distressNeighborSum += tempDistressPher[y - 1][x];
-          neighborCount++;
-        }
-        if (this.isValidCell(x, y + 1)) {
-          foodNeighborSum += tempFoodPher[y + 1][x];
-          homeNeighborSum += tempHomePher[y + 1][x];
-          distressNeighborSum += tempDistressPher[y + 1][x];
-          neighborCount++;
-        }
+        // Peek at neighbors to see if diffusion is needed
+        let hasNonZeroNeighbor = false;
+        if (this.isValidCell(x - 1, y) && tempFoodPher[getIdx(x - 1, y)] + tempHomePher[getIdx(x - 1, y)] + tempDistressPher[getIdx(x - 1, y)] > minThreshold) hasNonZeroNeighbor = true;
+        if (this.isValidCell(x + 1, y) && tempFoodPher[getIdx(x + 1, y)] + tempHomePher[getIdx(x + 1, y)] + tempDistressPher[getIdx(x + 1, y)] > minThreshold) hasNonZeroNeighbor = true;
+        if (this.isValidCell(x, y - 1) && tempFoodPher[getIdx(x, y - 1)] + tempHomePher[getIdx(x, y - 1)] + tempDistressPher[getIdx(x, y - 1)] > minThreshold) hasNonZeroNeighbor = true;
+        if (this.isValidCell(x, y + 1) && tempFoodPher[getIdx(x, y + 1)] + tempHomePher[getIdx(x, y + 1)] + tempDistressPher[getIdx(x, y + 1)] > minThreshold) hasNonZeroNeighbor = true;
 
-        if (neighborCount > 0) {
-          const foodAvg = foodNeighborSum / neighborCount;
-          const homeAvg = homeNeighborSum / neighborCount;
-          const distressAvg = distressNeighborSum / neighborCount;
+        // Only calculate diffusion if cell or neighbors have significant pheromone
+        if (hasNonZeroNeighbor || foodValue > minThreshold || homeValue > minThreshold || distressValue > minThreshold) {
+          // Diffusion: grid = (1 - D)*grid + D*avg(neighbors) - separate rates
+          // Calculate average of 4-connected neighbors
+          let foodNeighborSum = 0;
+          let homeNeighborSum = 0;
+          let distressNeighborSum = 0;
+          let neighborCount = 0;
 
-          // Apply separate diffusion rates
-          foodValue = (1 - D_food) * foodValue + D_food * foodAvg;
-          homeValue = (1 - D_home) * homeValue + D_home * homeAvg;
+          if (this.isValidCell(x - 1, y)) {
+            const nIdx = getIdx(x - 1, y);
+            foodNeighborSum += tempFoodPher[nIdx];
+            homeNeighborSum += tempHomePher[nIdx];
+            distressNeighborSum += tempDistressPher[nIdx];
+            neighborCount++;
+          }
+          if (this.isValidCell(x + 1, y)) {
+            const nIdx = getIdx(x + 1, y);
+            foodNeighborSum += tempFoodPher[nIdx];
+            homeNeighborSum += tempHomePher[nIdx];
+            distressNeighborSum += tempDistressPher[nIdx];
+            neighborCount++;
+          }
+          if (this.isValidCell(x, y - 1)) {
+            const nIdx = getIdx(x, y - 1);
+            foodNeighborSum += tempFoodPher[nIdx];
+            homeNeighborSum += tempHomePher[nIdx];
+            distressNeighborSum += tempDistressPher[nIdx];
+            neighborCount++;
+          }
+          if (this.isValidCell(x, y + 1)) {
+            const nIdx = getIdx(x, y + 1);
+            foodNeighborSum += tempFoodPher[nIdx];
+            homeNeighborSum += tempHomePher[nIdx];
+            distressNeighborSum += tempDistressPher[nIdx];
+            neighborCount++;
+          }
 
-          // Distress: concentration-dependent diffusion - higher concentration spreads faster
-          // Scale diffusion rate by concentration (0-1 normalized by max level)
-          const concentrationFactor = tempDistressPher[y][x] / CONFIG.PHEROMONE_MAX_LEVEL;
-          const effectiveDistressDiffusion = D_distress * (1.0 + concentrationFactor * 1.5); // Up to 2.5x diffusion at max concentration
-          const clampedDiffusion = Math.min(0.95, effectiveDistressDiffusion); // Cap to prevent instability
-          distressValue = (1 - clampedDiffusion) * distressValue + clampedDiffusion * distressAvg;
+          if (neighborCount > 0) {
+            const foodAvg = foodNeighborSum / neighborCount;
+            const homeAvg = homeNeighborSum / neighborCount;
+            const distressAvg = distressNeighborSum / neighborCount;
+
+            // Apply separate diffusion rates
+            foodValue = (1 - D_food) * foodValue + D_food * foodAvg;
+            homeValue = (1 - D_home) * homeValue + D_home * homeAvg;
+
+            // Distress: concentration-dependent diffusion - higher concentration spreads faster
+            // Scale diffusion rate by concentration (0-1 normalized by max level)
+            const concentrationFactor = tempDistressPher[currentIdx] / CONFIG.PHEROMONE_MAX_LEVEL;
+            const effectiveDistressDiffusion = D_distress * (1.0 + concentrationFactor * 1.5); // Up to 2.5x diffusion at max concentration
+            const clampedDiffusion = Math.min(0.95, effectiveDistressDiffusion); // Cap to prevent instability
+            distressValue = (1 - clampedDiffusion) * distressValue + clampedDiffusion * distressAvg;
+          }
         }
 
         this.grid[y][x].foodPher = foodValue;
@@ -358,9 +391,9 @@ export class PheromoneGrid {
         this.grid[y][x].distressPher = Math.min(distressValue, CONFIG.PHEROMONE_MAX_LEVEL * 0.4);
 
         // Remove very small values to avoid flicker
-        if (this.grid[y][x].foodPher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].foodPher = 0;
-        if (this.grid[y][x].homePher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].homePher = 0;
-        if (this.grid[y][x].distressPher < CONFIG.PHEROMONE_MIN_THRESHOLD) this.grid[y][x].distressPher = 0;
+        if (this.grid[y][x].foodPher < minThreshold) this.grid[y][x].foodPher = 0;
+        if (this.grid[y][x].homePher < minThreshold) this.grid[y][x].homePher = 0;
+        if (this.grid[y][x].distressPher < minThreshold) this.grid[y][x].distressPher = 0;
       }
     }
   }
