@@ -541,6 +541,12 @@ public stuckCounter: number = 0;
     const efficiencyFactor = 1.0 / this.traits.efficiencyMultiplier;
     this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier * efficiencyFactor;
 
+    // Scouts regenerate energy while guarding food (resting at post)
+    if (this.role === AntRole.SCOUT && this.scoutState === ScoutState.GUARDING_FOOD && !this.isInCombat) {
+      this.energy += CONFIG.SCOUT_ENERGY_REGEN * cappedDelta;
+      this.energy = Math.min(this.energyCapacity, this.energy); // Cap at max
+    }
+
     if (this.energy <= 0) {
       this.isDead = true;
       return;
@@ -2102,6 +2108,12 @@ public stuckCounter: number = 0;
     const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
     const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 1, y: 0 };
 
+    // If already within return radius, stop navigating toward exact center - just maintain current trajectory
+    // This prevents clustering at the exact center point while allowing ants to keep momentum
+    if (colonyDist < CONFIG.COLONY_RETURN_RADIUS) {
+      return; // Don't steer - just coast with current velocity
+    }
+
     let dirX: number;
     let dirY: number;
 
@@ -2496,21 +2508,29 @@ public stuckCounter: number = 0;
       console.log(`[Combat] Enemy detected at ${nearestDistance.toFixed(0)}px - Role: ${this.role}, Carrying: ${isCarryingFood}, Energy: ${this.energy.toFixed(0)}`);
     }
 
-    // FORAGER behavior: Always flee unless cornered with food
+    // FORAGER behavior: Flee or ignore based on config
     if (isForager) {
-      // Always flee
-      this.fleeing = true;
-      this.fleeDirection = Math.atan2(
-        this.position.y - nearestEnemy.position.y,
-        this.position.x - nearestEnemy.position.x
-      );
+      if (CONFIG.FORAGERS_FLEE) {
+        // Always flee
+        this.fleeing = true;
+        this.fleeDirection = Math.atan2(
+          this.position.y - nearestEnemy.position.y,
+          this.position.x - nearestEnemy.position.x
+        );
 
-      // Override movement to flee
-      this.setDirection({ x: Math.cos(this.fleeDirection), y: Math.sin(this.fleeDirection) }, deltaTime);
+        // Override movement to flee
+        this.setDirection({ x: Math.cos(this.fleeDirection), y: Math.sin(this.fleeDirection) }, deltaTime);
 
-      // If in combat range and carrying food, fight desperately
-      if (nearestDistance < CONFIG.COMBAT_RANGE && isCarryingFood) {
-        this.engageInCombat(deltaTime, nearestEnemy);
+        // If in combat range and carrying food, fight desperately
+        if (nearestDistance < CONFIG.COMBAT_RANGE && isCarryingFood) {
+          this.engageInCombat(deltaTime, nearestEnemy);
+        }
+      } else {
+        // Flee disabled - only fight if actually in melee range
+        if (nearestDistance < CONFIG.COMBAT_RANGE) {
+          this.engageInCombat(deltaTime, nearestEnemy);
+        }
+        // Otherwise ignore enemy and continue normal behavior
       }
       return;
     }
@@ -2551,7 +2571,7 @@ public stuckCounter: number = 0;
     this.combatTarget = enemy;
     this.fleeing = false;
 
-    // Emit distress pheromone to alert nearby friendlies
+    // Emit distress pheromone to alert nearby ants
     this.pheromoneGrid.depositDistressPheromone(
       this.position.x,
       this.position.y,

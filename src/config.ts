@@ -8,7 +8,7 @@ export const WORLD_HEIGHT = 10000;
 export const INITIAL_ANT_COUNT = 300; // Test FPS with fewer ants
 export const MAX_ANT_COUNT = 5000;
 export const COLONY_STARTING_FOOD = 0; // Start with no food - ants must forage to grow population
-export const COLONY_RETURN_RADIUS = 480; // Distance within which ant can deliver food (matches colony size)
+export const COLONY_RETURN_RADIUS = 350; // Distance within which ant can deliver food
 export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
 export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive generation culling
 
@@ -57,6 +57,7 @@ export const ANT_STARTING_ENERGY = 500; // Starting energy per ant (scaled for l
 export const ANT_ENERGY_DRAIN = 0.03; // Ants starve in ~2 minutes without food
 export const ANT_ENERGY_FROM_FOOD_PICKUP = 10; // Energy restored when finding food
 export const ANT_ENERGY_FROM_COLONY = 30; // Energy restored when returning to colony
+export const SCOUT_ENERGY_REGEN = 0.05; // Scouts regenerate this much energy per frame when not in combat
 export const ANT_LOW_ENERGY_THRESHOLD = 100; // Energy level to trigger panic mode (abandon trails, beeline home)
 export const ANT_FOOD_PICKUP_RADIUS = 35; // Physical collision radius for picking up food (not vision range)
 export const ANT_SIZE = 5; // Visual size of ant sprite
@@ -92,7 +93,8 @@ export const COMBAT_RANGE = 20; // Distance to initiate combat (pixels)
 export const BASE_COMBAT_DAMAGE = 15; // Base energy drained per second in combat
 export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when energy drops below this
 export const COMBAT_ENERGY_REWARD = 10; // Energy gained for winning a fight
-export const COMBAT_DETECTION_RANGE = 150; // Distance to detect enemy ants (pixels)
+export const COMBAT_DETECTION_RANGE = 300; // Distance to detect enemy ants (pixels) - increased for more combat
+export const FORAGERS_FLEE = false; // Toggle whether foragers flee from enemies
 
 // Ant physics and collision
 export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
@@ -131,7 +133,7 @@ export const PHEROMONE_DISTRESS_DECAY_RATE = 0.1; // Fast decay - distress signa
 // Diffusion rates - separate for each type (much smaller than before)
 export const PHEROMONE_HOME_DIFFUSION_RATE = 0.01; // Minimal diffusion for home
 export const PHEROMONE_FOOD_DIFFUSION_RATE = 0.02; // Slightly more diffusion for food
-export const PHEROMONE_DISTRESS_DIFFUSION_RATE = 1.5; // Fast spread - distress floods outward
+export const PHEROMONE_DISTRESS_DIFFUSION_RATE = 5.0; // Very fast spread - distress floods outward rapidly when actively produced
 
 export const PHEROMONE_MAX_LEVEL = 10; // Maximum pheromone concentration per cell
 export const PHEROMONE_MIN_THRESHOLD = 0.00001; // Minimum level before clearing (very small to avoid flicker)
@@ -147,7 +149,7 @@ export const PHEROMONE_FORAGER_STRENGTH_PER_UNIT = 0.10; // Forager foodPher str
 // Distress pheromone settings (emergency signaling)
 export const DISTRESS_DEPOSIT_STRENGTH = 5.0; // High intensity per deposit (floods area)
 export const DISTRESS_DETECTION_THRESHOLD = 0.5; // Min level to detect distress
-export const DISTRESS_EMIT_RADIUS = 50; // Deposit in area around ant (pixels)
+export const DISTRESS_EMIT_RADIUS = 300; // Deposit in area around ant (pixels) - large radius for emergency alerting
 
 export const PHEROMONE_FOOD_ALPHA_MAX = 0.15; // Max alpha for food pheromone visualization
 export const PHEROMONE_FOOD_ALPHA_DIVISOR = 20; // Divisor for food alpha calculation

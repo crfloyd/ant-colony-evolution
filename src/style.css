@@ -170,6 +170,12 @@ body {
   text-align: center;
 }
 
+.stat-label {
+  color: #aaa;
+  font-size: 0.8em;
+  min-width: 60px;
+}
+
 .stat-value {
   color: #64ff64;
   font-size: 0.95em;

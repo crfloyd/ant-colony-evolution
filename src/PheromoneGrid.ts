@@ -127,9 +127,9 @@ export class PheromoneGrid {
         const falloff = 1.0 - (distInCells / radiusInCells);
         const amount = intensity * falloff;
 
-        // Cap at 40% of max level to force spreading instead of accumulation
+        // Cap at 80% of max level - allows accumulation for strong diffusion pressure
         this.grid[gridY][gridX].distressPher = Math.min(
-          CONFIG.PHEROMONE_MAX_LEVEL * 0.4,
+          CONFIG.PHEROMONE_MAX_LEVEL * 0.8,
           this.grid[gridY][gridX].distressPher + amount
         );
       }
@@ -440,8 +440,7 @@ export class PheromoneGrid {
         this.grid[y][x].foodPher[1] = food1Value;
         this.grid[y][x].homePher[0] = home0Value;
         this.grid[y][x].homePher[1] = home1Value;
-        // Cap distress at lower level to force spreading (40% of max)
-        this.grid[y][x].distressPher = Math.min(distressValue, CONFIG.PHEROMONE_MAX_LEVEL * 0.4);
+        this.grid[y][x].distressPher = distressValue;
 
         // Remove very small values to avoid flicker
         if (this.grid[y][x].foodPher[0] < minThreshold) this.grid[y][x].foodPher[0] = 0;

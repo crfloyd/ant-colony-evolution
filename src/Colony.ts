@@ -248,6 +248,14 @@ export class Colony implements Entity {
     return this.ants.length;
   }
 
+  public getForagerCount(): number {
+    return this.ants.filter(ant => ant.role === AntRole.FORAGER).length;
+  }
+
+  public getScoutCount(): number {
+    return this.ants.filter(ant => ant.role === AntRole.SCOUT).length;
+  }
+
   public recordKill(): void {
     this.kills++;
   }

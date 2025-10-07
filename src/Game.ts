@@ -61,13 +61,15 @@ export class Game {
 
   // UI elements - Colony stats
   private blackAntCountEl: HTMLElement;
+  private blackForagerCountEl: HTMLElement;
+  private blackScoutCountEl: HTMLElement;
   private blackFoodCountEl: HTMLElement;
   private blackKillsEl: HTMLElement;
-  private blackGenerationEl: HTMLElement;
   private redAntCountEl: HTMLElement;
+  private redForagerCountEl: HTMLElement;
+  private redScoutCountEl: HTMLElement;
   private redFoodCountEl: HTMLElement;
   private redKillsEl: HTMLElement;
-  private redGenerationEl: HTMLElement;
   private simTimeEl: HTMLElement;
   private fpsEl: HTMLElement;
 
@@ -77,13 +79,15 @@ export class Game {
 
     // Initialize UI elements
     this.blackAntCountEl = document.getElementById('blackAntCount')!;
+    this.blackForagerCountEl = document.getElementById('blackForagerCount')!;
+    this.blackScoutCountEl = document.getElementById('blackScoutCount')!;
     this.blackFoodCountEl = document.getElementById('blackFoodCount')!;
     this.blackKillsEl = document.getElementById('blackKills')!;
-    this.blackGenerationEl = document.getElementById('blackGeneration')!;
     this.redAntCountEl = document.getElementById('redAntCount')!;
+    this.redForagerCountEl = document.getElementById('redForagerCount')!;
+    this.redScoutCountEl = document.getElementById('redScoutCount')!;
     this.redFoodCountEl = document.getElementById('redFoodCount')!;
     this.redKillsEl = document.getElementById('redKills')!;
-    this.redGenerationEl = document.getElementById('redGeneration')!;
     this.simTimeEl = document.getElementById('simTime')!;
     this.fpsEl = document.getElementById('fps')!;
 
@@ -1590,16 +1594,18 @@ Notes:
     // Update black colony stats
     const blackColony = this.colonies[0];
     this.blackAntCountEl.textContent = blackColony.getAntCount().toString();
+    this.blackForagerCountEl.textContent = blackColony.getForagerCount().toString();
+    this.blackScoutCountEl.textContent = blackColony.getScoutCount().toString();
     this.blackFoodCountEl.textContent = Math.floor(blackColony.foodStored).toString();
     this.blackKillsEl.textContent = blackColony.kills.toString();
-    this.blackGenerationEl.textContent = `Gen ${blackColony.generation}`;
 
     // Update red colony stats
     const redColony = this.colonies[1];
     this.redAntCountEl.textContent = redColony.getAntCount().toString();
+    this.redForagerCountEl.textContent = redColony.getForagerCount().toString();
+    this.redScoutCountEl.textContent = redColony.getScoutCount().toString();
     this.redFoodCountEl.textContent = Math.floor(redColony.foodStored).toString();
     this.redKillsEl.textContent = redColony.kills.toString();
-    this.redGenerationEl.textContent = `Gen ${redColony.generation}`;
 
     // Format simulation time as M:SS
     const totalSeconds = Math.floor(this.simulationTime);
