@@ -1,14 +1,14 @@
 // Simulation Configuration Constants
 
 // World Settings
-export const WORLD_WIDTH = 20000;
-export const WORLD_HEIGHT = 20000;
+export const WORLD_WIDTH = 10000;
+export const WORLD_HEIGHT = 10000;
 
 // Colony Settings
 export const INITIAL_ANT_COUNT = 300; // Test FPS with fewer ants
 export const MAX_ANT_COUNT = 5000;
 export const COLONY_STARTING_FOOD = 0; // Start with no food - ants must forage to grow population
-export const COLONY_RETURN_RADIUS = 380; // Distance within which ant can deliver food
+export const COLONY_RETURN_RADIUS = 480; // Distance within which ant can deliver food (matches colony size)
 export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
 export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive generation culling
 

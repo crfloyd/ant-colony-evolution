@@ -1272,9 +1272,9 @@ public stuckCounter: number = 0;
       console.log(`[Selected Ant] Large turn: dAng=${(dAng * 180 / Math.PI).toFixed(1)}°, curAng=${(curAng * 180 / Math.PI).toFixed(1)}°, targetAng=${(this.previousTargetHeading * 180 / Math.PI).toFixed(1)}°`);
     }
 
-    // target speed is max; accelerate toward it
+    // target speed is max; accelerate toward it (use individual maxSpeed, not config constant)
     const v = Math.hypot(this.velocity.x, this.velocity.y);
-    const targetV = CONFIG.ANT_MAX_SPEED;
+    const targetV = this.maxSpeed; // Use ant's actual max speed (accounts for role and traits)
     const dvMax = CONFIG.ANT_MAX_ACCEL * dt;
     const newV = v + Math.max(-dvMax, Math.min(dvMax, targetV - v));
 
@@ -2411,11 +2411,11 @@ public stuckCounter: number = 0;
         const dirX = Math.cos(finalAngle);
         const dirY = Math.sin(finalAngle);
 
-        // Give ant outward velocity to move away
+        // Give ant outward velocity to move away from drop point
         this.velocity.x = dirX * this.maxSpeed;
         this.velocity.y = dirY * this.maxSpeed;
 
-        // Set cooldown so ant keeps moving away before other behaviors interfere
+        // Set cooldown so ant disperses before resuming foraging
         this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
         this.stuckCounter = 0; // Reset stuck counter
       }
@@ -2432,8 +2432,11 @@ public stuckCounter: number = 0;
     }
 
     // Find nearest enemy ant within detection range
+    // Scouts prioritize enemy scouts over foragers
     let nearestEnemy: Ant | null = null;
     let nearestDistance = CONFIG.COMBAT_DETECTION_RANGE;
+    let nearestScout: Ant | null = null;
+    let nearestScoutDistance = CONFIG.COMBAT_DETECTION_RANGE;
 
     for (const enemy of enemyAnts) {
       if (enemy.isDead) continue;
@@ -2455,10 +2458,23 @@ public stuckCounter: number = 0;
       const ey = this.position.y - enemy.position.y;
       const dist = Math.sqrt(ex * ex + ey * ey);
 
+      // Track nearest enemy overall
       if (dist < nearestDistance) {
         nearestDistance = dist;
         nearestEnemy = enemy;
       }
+
+      // If we're a scout, prioritize enemy scouts
+      if (this.role === AntRole.SCOUT && enemy.role === AntRole.SCOUT && dist < nearestScoutDistance) {
+        nearestScoutDistance = dist;
+        nearestScout = enemy;
+      }
+    }
+
+    // Scouts prioritize attacking enemy scouts over foragers
+    if (this.role === AntRole.SCOUT && nearestScout) {
+      nearestEnemy = nearestScout;
+      nearestDistance = nearestScoutDistance;
     }
 
     // No enemies detected - clear combat state
@@ -2534,6 +2550,13 @@ public stuckCounter: number = 0;
     this.isInCombat = true;
     this.combatTarget = enemy;
     this.fleeing = false;
+
+    // Emit distress pheromone to alert nearby friendlies
+    this.pheromoneGrid.depositDistressPheromone(
+      this.position.x,
+      this.position.y,
+      CONFIG.DISTRESS_DEPOSIT_STRENGTH
+    );
 
     // Calculate damage dealt to enemy: damageDealt = BASE_COMBAT_DAMAGE * (yourSpeed / opponentEfficiency)
     const myDamageMultiplier = this.maxSpeed / enemy.traits.efficiencyMultiplier;
