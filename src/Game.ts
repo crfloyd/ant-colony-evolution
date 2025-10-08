@@ -73,6 +73,16 @@ export class Game {
   private simTimeEl: HTMLElement;
   private fpsEl: HTMLElement;
 
+  // UI elements - Genome visualization
+  private blackScoutRatioBarEl: HTMLElement;
+  private blackScoutRatioValueEl: HTMLElement;
+  private blackAggressionBarEl: HTMLElement;
+  private blackAggressionValueEl: HTMLElement;
+  private redScoutRatioBarEl: HTMLElement;
+  private redScoutRatioValueEl: HTMLElement;
+  private redAggressionBarEl: HTMLElement;
+  private redAggressionValueEl: HTMLElement;
+
   constructor(canvas: HTMLCanvasElement) {
     // Create PixiJS application
     this.app = new Application();
@@ -90,6 +100,16 @@ export class Game {
     this.redKillsEl = document.getElementById('redKills')!;
     this.simTimeEl = document.getElementById('simTime')!;
     this.fpsEl = document.getElementById('fps')!;
+
+    // Initialize genome UI elements
+    this.blackScoutRatioBarEl = document.getElementById('blackScoutRatioBar')!;
+    this.blackScoutRatioValueEl = document.getElementById('blackScoutRatioValue')!;
+    this.blackAggressionBarEl = document.getElementById('blackAggressionBar')!;
+    this.blackAggressionValueEl = document.getElementById('blackAggressionValue')!;
+    this.redScoutRatioBarEl = document.getElementById('redScoutRatioBar')!;
+    this.redScoutRatioValueEl = document.getElementById('redScoutRatioValue')!;
+    this.redAggressionBarEl = document.getElementById('redAggressionBar')!;
+    this.redAggressionValueEl = document.getElementById('redAggressionValue')!;
 
     // Start async initialization
     this.init(canvas).catch(err => {
@@ -795,9 +815,27 @@ export class Game {
         <span class="debug-label">⚫ Carry:</span>
         <span class="${getTraitColor(ant.traits.carryMultiplier)}">${ant.traits.carryMultiplier.toFixed(3)}x</span>
       </div>
+      ${ant.role === 'SCOUT' ? `
+      <div class="debug-row">
+        <span class="debug-label">❤️ Max HP:</span>
+        <span class="${getTraitColor(ant.traits.maxHealthMultiplier)}">${ant.traits.maxHealthMultiplier.toFixed(3)}x</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">⚔️ DPS:</span>
+        <span class="${getTraitColor(ant.traits.dpsMultiplier)}">${ant.traits.dpsMultiplier.toFixed(3)}x</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">💚 Regen:</span>
+        <span class="${getTraitColor(ant.traits.healthRegenMultiplier)}">${ant.traits.healthRegenMultiplier.toFixed(3)}x</span>
+      </div>
+      ` : ''}
       <div class="debug-row">
         <span class="debug-label">Food delivered:</span>
         <span class="debug-value">${ant.foodDelivered}</span>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Generation:</span>
+        <span class="debug-value">${ant.generation}</span>
       </div>
 
       <div class="debug-section-title">Status</div>
@@ -829,6 +867,12 @@ export class Game {
         <span class="debug-label">Energy:</span>
         <span class="debug-value">${ant.energy.toFixed(1)} / ${ant.energyCapacity}</span>
       </div>
+      ${ant.role === 'SCOUT' ? `
+      <div class="debug-row">
+        <span class="debug-label">Health:</span>
+        <span class="debug-value">${ant.health.toFixed(1)} / ${ant.maxHealth}</span>
+      </div>
+      ` : ''}
       <div class="debug-row">
         <span class="debug-label">Carrying:</span>
         <span class="debug-value">${ant.carryingAmount} / ${ant.carryCapacity}</span>
@@ -1058,13 +1102,18 @@ Position: (${Math.round(ant.position.x)}, ${Math.round(ant.position.y)})
 Speed: ${ant.traits.speedMultiplier.toFixed(4)}x
 Vision: ${ant.traits.visionMultiplier.toFixed(4)}x
 Efficiency: ${ant.traits.efficiencyMultiplier.toFixed(4)}x
-Carry: ${ant.traits.carryMultiplier.toFixed(4)}x
+Carry: ${ant.traits.carryMultiplier.toFixed(4)}x${ant.role === 'SCOUT' ? `
+Max HP: ${ant.traits.maxHealthMultiplier.toFixed(4)}x
+DPS: ${ant.traits.dpsMultiplier.toFixed(4)}x
+Health Regen: ${ant.traits.healthRegenMultiplier.toFixed(4)}x` : ''}
 Food Delivered: ${ant.foodDelivered} units
+Generation: ${ant.generation}
 
 State & Role:
 State: ${ant.state === 'FORAGING' ? 'FORAGING' : 'RETURNING'}
 Role: ${ant.role === 'FORAGER' ? 'FORAGER' : 'SCOUT'}
-Energy: ${ant.energy.toFixed(1)} / ${ant.energyCapacity || 500}
+Energy: ${ant.energy.toFixed(1)} / ${ant.energyCapacity || 500}${ant.role === 'SCOUT' ? `
+Health: ${ant.health.toFixed(1)} / ${ant.maxHealth}` : ''}
 Carrying: ${ant.carryingAmount} / ${ant.carryCapacity || 2}
 Speed: ${speed.toFixed(2)} / ${ant.maxSpeed.toFixed(2)} max
 
@@ -1599,6 +1648,14 @@ Notes:
     this.blackFoodCountEl.textContent = Math.floor(blackColony.foodStored).toString();
     this.blackKillsEl.textContent = blackColony.kills.toString();
 
+    // Update black colony genome
+    const blackScoutPercent = Math.round(blackColony.genome.scoutRatio * 100);
+    const blackAggressionPercent = Math.round(blackColony.genome.aggression * 100);
+    this.blackScoutRatioBarEl.style.width = `${blackScoutPercent}%`;
+    this.blackScoutRatioValueEl.textContent = `${blackScoutPercent}%`;
+    this.blackAggressionBarEl.style.width = `${blackAggressionPercent}%`;
+    this.blackAggressionValueEl.textContent = `${blackAggressionPercent}%`;
+
     // Update red colony stats
     const redColony = this.colonies[1];
     this.redAntCountEl.textContent = redColony.getAntCount().toString();
@@ -1606,6 +1663,14 @@ Notes:
     this.redScoutCountEl.textContent = redColony.getScoutCount().toString();
     this.redFoodCountEl.textContent = Math.floor(redColony.foodStored).toString();
     this.redKillsEl.textContent = redColony.kills.toString();
+
+    // Update red colony genome
+    const redScoutPercent = Math.round(redColony.genome.scoutRatio * 100);
+    const redAggressionPercent = Math.round(redColony.genome.aggression * 100);
+    this.redScoutRatioBarEl.style.width = `${redScoutPercent}%`;
+    this.redScoutRatioValueEl.textContent = `${redScoutPercent}%`;
+    this.redAggressionBarEl.style.width = `${redAggressionPercent}%`;
+    this.redAggressionValueEl.textContent = `${redAggressionPercent}%`;
 
     // Format simulation time as M:SS
     const totalSeconds = Math.floor(this.simulationTime);

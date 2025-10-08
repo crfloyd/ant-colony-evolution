@@ -373,7 +373,7 @@ export class PheromoneGrid {
 
         // Distress: concentration-dependent decay - higher concentration decays faster to prevent accumulation
         const distressConcentration = cell.distressPher / CONFIG.PHEROMONE_MAX_LEVEL;
-        const effectiveDistressDecay = rho_distress * (1.0 + distressConcentration * 1.5); // Up to 2.5x decay at max concentration
+        const effectiveDistressDecay = rho_distress * (1.0 + distressConcentration * 0.3); // Up to 1.3x decay at max concentration (reduced from 2.5x)
         let distressValue = cell.distressPher * (1 - effectiveDistressDecay);
 
         // Optimization 3: Check if we need to calculate diffusion at all
@@ -430,8 +430,8 @@ export class PheromoneGrid {
 
             // Distress: concentration-dependent diffusion - higher concentration spreads faster
             const concentrationFactor = tempDistressPher[currentIdx] / CONFIG.PHEROMONE_MAX_LEVEL;
-            const effectiveDistressDiffusion = D_distress * (1.0 + concentrationFactor * 1.5); // Up to 2.5x diffusion at max concentration
-            const clampedDiffusion = Math.min(0.95, effectiveDistressDiffusion); // Cap to prevent instability
+            const effectiveDistressDiffusion = D_distress * (1.0 + concentrationFactor * 3.0); // Up to 4x diffusion at max concentration (increased from 2.5x)
+            const clampedDiffusion = Math.min(0.98, effectiveDistressDiffusion); // Cap to prevent instability (raised from 0.95)
             distressValue = (1 - clampedDiffusion) * distressValue + clampedDiffusion * distressAvg;
           }
         }

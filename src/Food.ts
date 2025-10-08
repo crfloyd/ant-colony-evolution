@@ -79,9 +79,12 @@ export class FoodSource implements Entity {
 
   // Guard tracking methods (Phase 1.2)
   public registerGuard(ant: any): void {
-    // Only allow guards from the same colony as the one that claimed the food
-    if (this.claimedByColony && ant.colony && this.claimedByColony !== ant.colony) {
-      return; // Enemy colony, don't register
+    // Only allow guards from the same colony as the one that claimed the food (compare by position)
+    if (this.claimedByColony && ant.colony) {
+      const isSameColony = this.claimedByColony.x === ant.colony.x && this.claimedByColony.y === ant.colony.y;
+      if (!isSameColony) {
+        return; // Enemy colony, don't register
+      }
     }
 
     if (!this.guardsPresent.includes(ant)) {
@@ -129,14 +132,22 @@ export class FoodSource implements Entity {
       this.claimedByColony = ant.colony;
     }
 
-    // Check if food is claimed by enemy colony
-    if (this.claimedByColony && ant.colony && this.claimedByColony !== ant.colony) {
-      return false; // Enemy colony owns this food
+    // Check if food is claimed by enemy colony (compare by position coordinates)
+    if (this.claimedByColony && ant.colony) {
+      const isSameColony = this.claimedByColony.x === ant.colony.x && this.claimedByColony.y === ant.colony.y;
+      if (!isSameColony) {
+        return false; // Enemy colony owns this food
+      }
     }
 
-    // Count taggers from the same colony only
-    const friendlyTaggers = this.scoutsTagging.filter(tagger => tagger.colony === ant.colony);
-    if (friendlyTaggers.length >= 2) {
+    // Count taggers from the same colony only (compare by position coordinates)
+    const friendlyTaggers = this.scoutsTagging.filter(tagger =>
+      tagger.colony && ant.colony &&
+      tagger.colony.x === ant.colony.x &&
+      tagger.colony.y === ant.colony.y
+    );
+
+    if (friendlyTaggers.length >= CONFIG.SCOUT_MAX_TAGGERS_PER_FOOD) {
       return false; // At capacity for this colony
     }
 
@@ -307,12 +318,11 @@ export class FoodManager {
         }
       }
 
-      // Clean up taggers who died, are exploring, or switched to different food
-      // Keep them registered even in GUARDING_FOOD state (they already tagged)
+      // Clean up taggers who died or switched to different food
+      // Keep them registered even if they're EXPLORING or GUARDING_FOOD (permanent tagger slots)
       const taggers = food.getTaggers();
       for (const tagger of taggers) {
         if (!tagger || tagger.energy <= 0 || !tagger.isAlive ||
-            tagger.scoutState === 'EXPLORING' ||
             (tagger.guardingFoodId && tagger.guardingFoodId !== food.id)) {
           food.unregisterTagger(tagger);
         }

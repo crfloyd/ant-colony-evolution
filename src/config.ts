@@ -6,7 +6,7 @@ export const WORLD_HEIGHT = 10000;
 
 // Colony Settings
 export const INITIAL_ANT_COUNT = 300; // Test FPS with fewer ants
-export const MAX_ANT_COUNT = 5000;
+export const MAX_ANT_COUNT = 800; // Trigger generation advancement when population exceeds this
 export const COLONY_STARTING_FOOD = 0; // Start with no food - ants must forage to grow population
 export const COLONY_RETURN_RADIUS = 350; // Distance within which ant can deliver food
 export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
@@ -14,6 +14,8 @@ export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive g
 
 // Evolution Settings
 export const MUTATION_RATE = 0.005; // ±0.005 per generation (0.5% change per offspring)
+export const FORAGER_MUTATION_RATE = 0.003; // Foragers mutate slower (0.3% change per offspring)
+export const SCOUT_MUTATION_RATE = 0.005; // Scouts mutate faster (0.5% change per offspring)
 export const TRAIT_MIN = 0.7; // Minimum trait multiplier
 export const TRAIT_MAX = 1.3; // Maximum trait multiplier
 
@@ -21,12 +23,12 @@ export const TRAIT_MAX = 1.3; // Maximum trait multiplier
 export const FOOD_COST_TO_SPAWN = 10;
 
 // Food Settings
-export const INITIAL_FOOD_SOURCES = 10;
+export const INITIAL_FOOD_SOURCES = 6;
 export const MIN_FOOD_PER_SOURCE = 50;
 export const MAX_FOOD_PER_SOURCE = 100;
 export const FOOD_RESPAWN_INTERVAL = 1200; // frames - slower respawn
 export const MAX_FOOD_SOURCES = 30; // More food sources to support population
-export const FOOD_MIN_DIST_FROM_COLONY = 150; // Minimum spawn distance from colony
+export const FOOD_MIN_DIST_FROM_COLONY = 1500; // Minimum spawn distance from colony
 export const FOOD_PHER_AVOIDANCE_THRESHOLD = 15.0; // Only avoid VERY high foodPher areas
 export const FOOD_SPAWN_MARGIN = 50; // Keep food away from world edges
 export const FOOD_SPAWN_OBSTACLE_CHECK_RADIUS = 80; // Radius for obstacle collision check (larger than max food radius to prevent overlap)
@@ -82,17 +84,23 @@ export const SCOUT_GUARD_DETECTION_RANGE = 200; // Detect friendly guards
 export const SCOUT_DISTRESS_DETECTION_RANGE = 500; // Detect distress pheromone
 
 // Scout guarding behavior (Phase 2.3)
-export const SCOUT_GUARD_RADIUS = 400; // Stay within this distance of food while guarding (pixels)
+export const SCOUT_GUARD_RADIUS = 800; // Stay within this distance of food while guarding (pixels)
 export const SCOUT_GUARD_PATROL_MIN = 150; // Minimum patrol distance from food (pixels)
 export const SCOUT_GUARD_PATROL_MAX = 350; // Maximum patrol distance from food (pixels)
 export const SCOUT_GUARD_TIMEOUT = 60; // Seconds to wait for foragers before re-alerting colony
-export const SCOUT_MAX_TAGGERS_PER_FOOD = 2; // Maximum scouts that should tag the same food source
+export const SCOUT_MAX_TAGGERS_PER_FOOD = 1; // Maximum scouts that should tag the same food source (only 1 scout alerts colony)
+export const SCOUT_MAX_GUARDS_PER_FOOD = 5; // Maximum scouts guarding a single food source
 
 // Combat Settings
 export const COMBAT_RANGE = 20; // Distance to initiate combat (pixels)
-export const BASE_COMBAT_DAMAGE = 15; // Base energy drained per second in combat
-export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when energy drops below this
-export const COMBAT_ENERGY_REWARD = 10; // Energy gained for winning a fight
+export const FORAGER_BASE_HEALTH = 300; // Base health for foragers (workers, weaker than scouts)
+export const FORAGER_BASE_DPS = 20; // Base damage per second for foragers
+export const SCOUT_BASE_HEALTH = 600; // Base health for scouts (fighters, 2x forager health)
+export const SCOUT_BASE_DPS = 50; // Base damage per second for scouts
+export const SCOUT_BASE_HEALTH_REGEN = 2.0; // Base health regen per second (20% per minute = 600 * 0.2 / 60)
+export const FORAGER_BASE_HEALTH_REGEN = 1.0; // Base health regen per second for foragers
+export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when health drops below this
+export const COMBAT_HEALTH_REWARD = 15; // Health gained for winning a fight
 export const COMBAT_DETECTION_RANGE = 300; // Distance to detect enemy ants (pixels) - increased for more combat
 export const FORAGERS_FLEE = false; // Toggle whether foragers flee from enemies
 
@@ -125,10 +133,10 @@ export const PHEROMONE_CELL_SIZE = 20;
 // Decay rates (evaporation) - separate for each type
 // homePher half-life ≈ 3 min @ 20Hz → ρ ≈ 0.000193 (persistent "safe area map")
 // foodPher half-life ≈ 20s @ 20Hz → ρ ≈ 0.00347
-// distressPher half-life ≈ 5s @ 20Hz → ρ ≈ 0.1 (emergency signal, fast fade)
+// distressPher half-life ≈ 1-2s @ 20Hz → ρ ≈ 0.4 (emergency signal, very fast fade)
 export const PHEROMONE_HOME_DECAY_RATE = 0.000193; // Very slow decay - accumulates as safe area map
 export const PHEROMONE_FOOD_DECAY_RATE = 0.00347; // Faster decay for food trails
-export const PHEROMONE_DISTRESS_DECAY_RATE = 0.1; // Fast decay - distress signal fades quickly
+export const PHEROMONE_DISTRESS_DECAY_RATE = 0.4; // Very fast decay - distress signal fades in 1-2 seconds
 
 // Diffusion rates - separate for each type (much smaller than before)
 export const PHEROMONE_HOME_DIFFUSION_RATE = 0.01; // Minimal diffusion for home
@@ -181,6 +189,7 @@ export const FORAGING_RANDOM_COMPONENT = 0.5; // Random score variation for expl
 export const FORAGING_PHEROMONE_SAMPLE_DISTANCE = 30; // Distance to sample pheromone
 export const FORAGING_TRAIL_MIN_LEVEL = 0.01; // Minimum pheromone to consider following (adjusted for new strengths)
 export const FORAGING_TRAIL_SAMPLE_MIN = 0.003; // Minimum pheromone in sample direction (adjusted for new strengths)
+export const FORAGING_GIVE_UP_TIME = 2700; // Frames (~45 seconds at 60fps) - if no food found, head back to colony to reset
 
 // Exploration commitment (smooth exploration movement)
 export const FORAGING_EXPLORATION_MIN_DURATION = 0.5; // Minimum seconds to commit to a direction

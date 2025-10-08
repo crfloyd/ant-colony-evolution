@@ -17,10 +17,13 @@ interface RayResult {
 
 /** Heritable genetic traits for evolution */
 export interface AntTraits {
-  speedMultiplier: number;      // 0.7-1.3: affects max speed
-  visionMultiplier: number;      // 0.7-1.3: affects vision range
-  efficiencyMultiplier: number;  // 0.7-1.3: affects energy drain (higher = more efficient)
-  carryMultiplier: number;       // 0.7-1.3: affects carry capacity
+  speedMultiplier: number;      // 0.7-1.3: affects max speed (both roles)
+  visionMultiplier: number;      // 0.7-1.3: affects vision range (both roles)
+  efficiencyMultiplier: number;  // 0.7-1.3: affects energy drain (higher = more efficient) - foragers only
+  carryMultiplier: number;       // 0.7-1.3: affects carry capacity (both roles)
+  maxHealthMultiplier: number;   // 0.7-1.3: affects max HP (both roles, foragers have lower base)
+  dpsMultiplier: number;         // 0.7-1.3: affects damage per second (scouts only, foragers inherit parent value)
+  healthRegenMultiplier: number; // 0.7-1.3: affects health regeneration rate (scouts only, foragers inherit parent value)
 }
 
 /** Helper to create default traits */
@@ -29,22 +32,36 @@ export function createDefaultTraits(): AntTraits {
     speedMultiplier: 1.0,
     visionMultiplier: 1.0,
     efficiencyMultiplier: 1.0,
-    carryMultiplier: 1.0
+    carryMultiplier: 1.0,
+    maxHealthMultiplier: 1.0,
+    dpsMultiplier: 1.0,
+    healthRegenMultiplier: 1.0
   };
 }
 
 /** Helper to mutate traits with small random changes */
-export function mutateTraits(parent: AntTraits, mutationRate: number = 0.1): AntTraits {
+export function mutateTraits(parent: AntTraits, role: AntRole, mutationRate?: number): AntTraits {
+  // Use role-specific mutation rate if not specified
+  const actualMutationRate = mutationRate !== undefined
+    ? mutationRate
+    : (role === AntRole.SCOUT ? CONFIG.SCOUT_MUTATION_RATE : CONFIG.FORAGER_MUTATION_RATE);
+
   const mutate = (value: number) => {
-    const change = (Math.random() - 0.5) * 2 * mutationRate; // ±mutationRate
-    return Math.max(0.7, Math.min(1.3, value + change)); // Clamp to 0.7-1.3
+    const change = (Math.random() - 0.5) * 2 * actualMutationRate; // ±mutationRate
+    return Math.max(CONFIG.TRAIT_MIN, Math.min(CONFIG.TRAIT_MAX, value + change)); // Clamp to 0.7-1.3
   };
 
   return {
     speedMultiplier: mutate(parent.speedMultiplier),
     visionMultiplier: mutate(parent.visionMultiplier),
     efficiencyMultiplier: mutate(parent.efficiencyMultiplier),
-    carryMultiplier: mutate(parent.carryMultiplier)
+    carryMultiplier: mutate(parent.carryMultiplier),
+    // Health can mutate for both roles
+    maxHealthMultiplier: mutate(parent.maxHealthMultiplier),
+    // DPS only mutates for scouts, foragers keep parent's DPS
+    dpsMultiplier: role === AntRole.SCOUT ? mutate(parent.dpsMultiplier) : parent.dpsMultiplier,
+    // Health regen only mutates for scouts (foragers don't use it as much)
+    healthRegenMultiplier: role === AntRole.SCOUT ? mutate(parent.healthRegenMultiplier) : parent.healthRegenMultiplier
   };
 }
 
@@ -59,6 +76,8 @@ export class Ant implements Entity {
   public role: AntRole = AntRole.FORAGER; // Scout or Forager
   public energy: number = CONFIG.ANT_STARTING_ENERGY;
   public energyCapacity: number = CONFIG.ANT_STARTING_ENERGY; // Max energy (for UI display)
+  public health: number = 100; // Health points (scouts only, used for combat)
+  public maxHealth: number = 100; // Maximum health
   public state: AntState = AntState.FORAGING;
   public hasFood: boolean = false; // Keep for backward compatibility temporarily
   public age: number = 0;
@@ -69,6 +88,7 @@ export class Ant implements Entity {
   public id: string = Math.random().toString(36).substr(2, 9); // Unique ID for debugging
   public static selectedAntId: string | null = null; // Static field for selected ant
   public foodDelivered: number = 0; // Total food delivered (for gene pool weighting)
+  public generation: number = 1; // Colony generation when ant was born
 
   // Trait visualization mode (toggled from UI)
   public static showTraitView: boolean = false;
@@ -170,7 +190,8 @@ public stuckCounter: number = 0;
     traits?: AntTraits,  // Optional traits parameter
     foragerTextures?: Texture[] | null,  // Forager sprite textures
     scoutTextures?: Texture[] | null,  // Scout sprite textures
-    onKill?: () => void  // Callback when this ant kills an enemy
+    onKill?: () => void,  // Callback when this ant kills an enemy
+    generation?: number  // Colony generation when ant was born
   ) {
     this.position = { ...position };
     this.colony = colony;
@@ -179,6 +200,7 @@ public stuckCounter: number = 0;
     this.worldHeight = worldHeight;
     this.role = role;
     this.onKillCallback = onKill || null;
+    this.generation = generation || 1;
 
     // Initialize traits (use provided or create default)
     this.traits = traits ? copyTraits(traits) : createDefaultTraits();
@@ -193,10 +215,16 @@ public stuckCounter: number = 0;
     // Foragers: 1-2 units (harvest trails), modified by carry trait
     if (role === AntRole.SCOUT) {
       this.carryCapacity = Math.max(1, Math.floor(CONFIG.SCOUT_CARRY_CAPACITY * this.traits.carryMultiplier));
+      // Apply scout-specific traits
+      this.maxHealth = CONFIG.SCOUT_BASE_HEALTH * this.traits.maxHealthMultiplier;
+      this.health = this.maxHealth; // Start at full health
     } else {
       const baseCapacity = CONFIG.FORAGER_MIN_CARRY_CAPACITY +
         Math.floor(Math.random() * (CONFIG.FORAGER_MAX_CARRY_CAPACITY - CONFIG.FORAGER_MIN_CARRY_CAPACITY + 1));
       this.carryCapacity = Math.max(1, Math.floor(baseCapacity * this.traits.carryMultiplier));
+      // Apply forager health
+      this.maxHealth = CONFIG.FORAGER_BASE_HEALTH * this.traits.maxHealthMultiplier;
+      this.health = this.maxHealth; // Start at full health
     }
 
     // Create sprite - use animated sprite if textures loaded, otherwise graphics fallback
@@ -534,20 +562,32 @@ public stuckCounter: number = 0;
     this.timeSinceLastFood += deltaTime;
 
     // Energy consumption (and cap deltaTime to prevent huge drains)
-    // Ants carrying food have greatly reduced energy drain (they're eating on the way!)
     const cappedDelta = Math.min(deltaTime, CONFIG.ANT_MAX_DELTA_TIME);
-    const energyMultiplier = this.hasFood ? 0.2 : 1.0; // 80% reduction when carrying food
-    // Apply energy drain with efficiency trait (higher efficiency = less drain)
-    const efficiencyFactor = 1.0 / this.traits.efficiencyMultiplier;
-    this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier * efficiencyFactor;
 
-    // Scouts regenerate energy while guarding food (resting at post)
-    if (this.role === AntRole.SCOUT && this.scoutState === ScoutState.GUARDING_FOOD && !this.isInCombat) {
-      this.energy += CONFIG.SCOUT_ENERGY_REGEN * cappedDelta;
-      this.energy = Math.min(this.energyCapacity, this.energy); // Cap at max
+    // Foragers use energy for movement (scouts don't have energy drain)
+    if (this.role === AntRole.FORAGER) {
+      const energyMultiplier = this.hasFood ? 0.2 : 1.0; // 80% reduction when carrying food
+      const efficiencyFactor = 1.0 / this.traits.efficiencyMultiplier;
+      this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier * efficiencyFactor;
+
+      // Foragers die from starvation
+      if (this.energy <= 0) {
+        this.isDead = true;
+        return;
+      }
     }
 
-    if (this.energy <= 0) {
+    // Regenerate health when not in combat (using trait multiplier)
+    if (!this.isInCombat) {
+      const healthRegenRate = this.role === AntRole.SCOUT
+        ? CONFIG.SCOUT_BASE_HEALTH_REGEN * this.traits.healthRegenMultiplier
+        : CONFIG.FORAGER_BASE_HEALTH_REGEN * this.traits.healthRegenMultiplier;
+      this.health += healthRegenRate * cappedDelta;
+      this.health = Math.min(this.maxHealth, this.health); // Cap at max
+    }
+
+    // Die when health reaches 0
+    if (this.health <= 0) {
       this.isDead = true;
       return;
     }
@@ -1386,6 +1426,39 @@ public stuckCounter: number = 0;
       return;
     }
 
+    // PRIORITY 0.5: GIVE UP MODE - if no food/trail found after 45s, return to colony
+    if (this.timeSinceLastFood > CONFIG.FORAGING_GIVE_UP_TIME) {
+      const colonyDir = {
+        x: this.colony.x - this.position.x,
+        y: this.colony.y - this.position.y
+      };
+      const colonyDist = Math.sqrt(colonyDir.x ** 2 + colonyDir.y ** 2);
+
+      // If we reached the colony, reset timer and resume normal foraging
+      if (colonyDist < CONFIG.COLONY_RETURN_RADIUS) {
+        this.timeSinceLastFood = 0;
+        if (this.id === Ant.selectedAntId) {
+          console.log(`[GIVE UP] Reached colony - resetting and resuming foraging`);
+        }
+        // Fall through to normal foraging behavior
+      } else {
+        // Still heading home
+        if (colonyDist > 0) {
+          colonyDir.x /= colonyDist;
+          colonyDir.y /= colonyDist;
+        }
+
+        if (this.id === Ant.selectedAntId && Math.random() < 0.02) {
+          console.log(`[GIVE UP] No food/trail for ${this.timeSinceLastFood.toFixed(0)}s - returning to colony (${colonyDist.toFixed(0)}px away)`);
+        }
+
+        this.setDirection(colonyDir, deltaTime);
+        this.onFoodTrail = false;
+        this.explorationCommitment = 0;
+        return;
+      }
+    }
+
     // PRIORITY 1: Direct food sensing (CONFIG.FORAGER_VISION_RANGE modified by vision trait)
     let nearestFood: { position: Vector2; distance: number } | null = null;
     let nearestDist = CONFIG.FORAGER_VISION_RANGE * this.traits.visionMultiplier;
@@ -1434,6 +1507,7 @@ public stuckCounter: number = 0;
         this.explorationCommitment = 0; // Reset exploration when entering trail
         this.trailFollowStartTime = this.age; // Track when we started following
         this.trailFollowDistance = 0; // Reset distance tracker
+        this.timeSinceLastFood = 0; // Reset give-up timer - we're actively following a trail
       }
     } else {
       // Track distance traveled while on trail
@@ -1773,6 +1847,7 @@ public stuckCounter: number = 0;
     if (foodSources) {
       for (const food of foodSources) {
         if (food.amount <= 0) continue;
+
         const dx = food.position.x - this.position.x;
         const dy = food.position.y - this.position.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1791,21 +1866,21 @@ public stuckCounter: number = 0;
       }
     }
 
-    // If scout can SEE food, go straight to it
-    if (nearestFood) {
-      this.smelledFoodId = null; // Clear smell tracking
-      const dir = {
-        x: nearestFood.position.x - this.position.x,
-        y: nearestFood.position.y - this.position.y
-      };
-      this.setDirection(dir, deltaTime);
-      return;
-    }
+      // If scout can SEE food, go straight to it
+      if (nearestFood) {
+        this.smelledFoodId = null; // Clear smell tracking
+        const dir = {
+          x: nearestFood.position.x - this.position.x,
+          y: nearestFood.position.y - this.position.y
+        };
+        this.setDirection(dir, deltaTime);
+        return;
+      }
 
-    // If scout can SMELL food, track it with progress checking
-    if (nearestSmell) {
-      // Check if we're making progress toward the smell
-      if (this.smelledFoodId === nearestSmell.id) {
+      // If scout can SMELL food, track it with progress checking
+      if (nearestSmell) {
+        // Check if we're making progress toward the smell
+        if (this.smelledFoodId === nearestSmell.id) {
         // Still tracking same food - check if getting closer
         const distanceChange = this.lastSmellDistance - nearestSmell.distance;
 
@@ -2101,6 +2176,7 @@ public stuckCounter: number = 0;
   private updateReturningBehavior(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
     // Pheromone deposits now handled by distance-based system in update() method
 
+
     const toColony = {
       x: this.colony.x - this.position.x,
       y: this.colony.y - this.position.y,
@@ -2274,11 +2350,45 @@ public stuckCounter: number = 0;
   public checkFoodPickup(foodPosition: Vector2, pickupRadius: number = 20, foodSourceId?: string, amountAvailable: number = 1, foodSource?: any): number {
     if (this.state === AntState.RETURNING) return 0; // Already carrying food
 
+    // Scouts guarding this food should not pick it up (they're defending it, not harvesting)
+    if (this.role === AntRole.SCOUT && this.scoutState === ScoutState.GUARDING_FOOD && this.guardingFoodId === foodSourceId) {
+      return 0; // Don't pick up the food we're guarding
+    }
+
     const dx = this.position.x - foodPosition.x;
     const dy = this.position.y - foodPosition.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist < pickupRadius && amountAvailable > 0) {
+      // SCOUTS: Check eligibility BEFORE picking up food
+      if (this.role === AntRole.SCOUT) {
+        // Try to register as tagger - returns false if already at max
+        const registeredAsTagger = foodSource ? foodSource.registerTagger(this) : true;
+
+        if (!registeredAsTagger) {
+          // Failed to register as tagger - become a guard (don't pick up food)
+          // Register as guard IMMEDIATELY so other scouts in this frame see the updated count
+          if (foodSource) {
+            foodSource.registerGuard(this);
+          }
+
+          this.explorationTarget = null;
+          this.guardingFoodId = foodSourceId || null;
+          this.state = AntState.FORAGING;
+          this.hasFood = false;
+          this.carryingAmount = 0;
+          this.foodSourceId = foodSourceId;
+          this.setScoutState(ScoutState.GUARDING_FOOD);
+          this.guardStartTime = Date.now();
+
+          return 0; // Don't pick up food
+        }
+
+        // Successfully registered as tagger - proceed with pickup below
+        this.explorationTarget = null;
+        this.guardingFoodId = foodSourceId || null;
+      }
+
       // Take a chunk: min(available, carry capacity)
       const amountToTake = Math.min(amountAvailable, this.carryCapacity);
 
@@ -2289,8 +2399,8 @@ public stuckCounter: number = 0;
 
       // State transition: Foraging -> Returning
       this.state = AntState.RETURNING;
-      this.hasFood = true; // Keep for backward compatibility
-      this.foodSourceId = foodSourceId || null; // Remember which food source this came from
+      this.hasFood = true;
+      this.foodSourceId = foodSourceId || null;
 
       // Reset pheromone deposit position for new trail
       this.lastFoodPheromoneDepositPos = null;
@@ -2300,42 +2410,13 @@ public stuckCounter: number = 0;
       this.timeSinceLastFood = 0;
 
       // Trail lock: Successfully found food! Reset trail tracking and clear any lock
-      this.onFoodTrail = false; // Exit trail mode (we found the food!)
-      this.trailLockTimer = 0; // Clear any existing lock - this was a good trail
+      this.onFoodTrail = false;
+      this.trailLockTimer = 0;
       this.trailFollowDistance = 0;
 
-      // Scout found food: try to register as tagger (atomic check-and-register)
+      // Scout taggers transition to TAGGING_FOOD state
       if (this.role === AntRole.SCOUT) {
-        this.explorationTarget = null;
-        this.guardingFoodId = foodSourceId || null;
-
-        // Try to register as tagger - returns false if already at max
-        const registeredAsTagger = foodSource ? foodSource.registerTagger(this) : true;
-
-        if (registeredAsTagger) {
-          // Successfully registered - proceed with tagging (pick up food and return)
-          if (this.id === Ant.selectedAntId) {
-            console.log(`[Scout] Registered as tagger for food ${foodSourceId} - will alert colony`);
-          }
-          this.setScoutState(ScoutState.TAGGING_FOOD);
-          // Continue with normal food pickup (state is RETURNING, carrying food)
-        } else {
-          // Already at max taggers - skip tagging and go straight to guarding
-          if (this.id === Ant.selectedAntId) {
-            console.log(`[Scout] Food ${foodSourceId} already has max taggers - going straight to guard`);
-          }
-
-          // DON'T pick up food - go straight to guarding
-          this.state = AntState.FORAGING; // Stay in foraging state (not returning)
-          this.hasFood = false;
-          this.carryingAmount = 0; // Don't carry food
-          this.foodSourceId = foodSourceId; // Remember which food we're guarding
-
-          this.setScoutState(ScoutState.GUARDING_FOOD);
-          this.guardStartTime = Date.now();
-
-          return 0; // Return 0 food taken (we didn't actually pick it up)
-        }
+        this.setScoutState(ScoutState.TAGGING_FOOD);
       }
 
       // Restore small amount of energy when finding food (Phase 3 Task 14)
@@ -2399,6 +2480,7 @@ public stuckCounter: number = 0;
       this.energy = Math.min(CONFIG.ANT_STARTING_ENERGY, this.energy + CONFIG.ANT_ENERGY_FROM_COLONY); // Restore some energy
       this.explorationCommitment = 0; // Reset exploration when returning to colony
       this.lastHomePheromoneDepositPos = null; // Reset for new foraging trail
+      this.timeSinceLastFood = 0; // Reset give-up timer when returning to colony
 
       // Push ant away from colony to prevent clustering at center
       // EXCEPT: scouts in GUARDING_FOOD state should head back to their food
@@ -2501,7 +2583,8 @@ public stuckCounter: number = 0;
     const isScout = this.role === AntRole.SCOUT;
     const isForager = this.role === AntRole.FORAGER;
     const isCarryingFood = this.carryingAmount > 0;
-    const lowEnergy = this.energy < CONFIG.COMBAT_FLEE_THRESHOLD;
+    // Scouts check health for flee threshold, foragers check energy
+    const lowHealthOrEnergy = isScout ? this.health < CONFIG.COMBAT_FLEE_THRESHOLD : this.energy < CONFIG.COMBAT_FLEE_THRESHOLD;
 
     // Debug: log enemy detection for selected ant
     if (this.id === Ant.selectedAntId) {
@@ -2535,21 +2618,8 @@ public stuckCounter: number = 0;
       return;
     }
 
-    // SCOUT behavior: Engage in combat
+    // SCOUT behavior: Engage in combat (scouts never flee)
     if (isScout) {
-      // Flee if low energy
-      if (lowEnergy) {
-        this.fleeing = true;
-        this.fleeDirection = Math.atan2(
-          this.position.y - nearestEnemy.position.y,
-          this.position.x - nearestEnemy.position.x
-        );
-
-        // Override movement to flee
-        this.setDirection({ x: Math.cos(this.fleeDirection), y: Math.sin(this.fleeDirection) }, deltaTime);
-        return;
-      }
-
       // Pursue and engage if within combat range
       if (nearestDistance < CONFIG.COMBAT_RANGE) {
         this.engageInCombat(deltaTime, nearestEnemy);
@@ -2578,20 +2648,40 @@ public stuckCounter: number = 0;
       CONFIG.DISTRESS_DEPOSIT_STRENGTH
     );
 
-    // Calculate damage dealt to enemy: damageDealt = BASE_COMBAT_DAMAGE * (yourSpeed / opponentEfficiency)
-    const myDamageMultiplier = this.maxSpeed / enemy.traits.efficiencyMultiplier;
-    const damageToEnemy = CONFIG.BASE_COMBAT_DAMAGE * myDamageMultiplier * deltaTime;
+    // Calculate damage dealt to enemy
+    let damageToEnemy: number;
+    if (this.role === AntRole.SCOUT) {
+      // Scouts use their DPS trait
+      const baseDPS = CONFIG.SCOUT_BASE_DPS * this.traits.dpsMultiplier;
+      // 1.5x damage vs foragers (scouts dominate workers)
+      const roleMultiplier = enemy.role === AntRole.FORAGER ? 1.5 : 1.0;
+      damageToEnemy = baseDPS * roleMultiplier * deltaTime;
+    } else {
+      // Foragers use their DPS trait (weaker than scouts)
+      const baseDPS = CONFIG.FORAGER_BASE_DPS * this.traits.dpsMultiplier;
+      damageToEnemy = baseDPS * deltaTime;
+    }
 
     // Calculate damage received from enemy
-    const enemyDamageMultiplier = enemy.maxSpeed / this.traits.efficiencyMultiplier;
-    const damageFromEnemy = CONFIG.BASE_COMBAT_DAMAGE * enemyDamageMultiplier * deltaTime;
+    let damageFromEnemy: number;
+    if (enemy.role === AntRole.SCOUT) {
+      // Enemy scout uses their DPS trait
+      const enemyBaseDPS = CONFIG.SCOUT_BASE_DPS * enemy.traits.dpsMultiplier;
+      // 1.5x damage vs foragers
+      const roleMultiplier = this.role === AntRole.FORAGER ? 1.5 : 1.0;
+      damageFromEnemy = enemyBaseDPS * roleMultiplier * deltaTime;
+    } else {
+      // Enemy forager uses their DPS trait
+      const enemyBaseDPS = CONFIG.FORAGER_BASE_DPS * enemy.traits.dpsMultiplier;
+      damageFromEnemy = enemyBaseDPS * deltaTime;
+    }
 
-    // Apply damage (both ants take damage simultaneously)
-    enemy.energy -= damageToEnemy;
-    this.energy -= damageFromEnemy;
+    // Apply damage to health for both roles
+    enemy.health -= damageToEnemy;
+    this.health -= damageFromEnemy;
 
-    // Check if enemy died
-    if (enemy.energy <= 0) {
+    // Check if enemy died (both roles use health)
+    if (enemy.health <= 0) {
       enemy.isDead = true;
 
       // Record kill for colony stats
@@ -2599,20 +2689,22 @@ public stuckCounter: number = 0;
         this.onKillCallback();
       }
 
-      // Winner spoils: steal carried food and gain energy reward
+      // Winner spoils: steal carried food and gain health reward
       if (enemy.carryingAmount > 0) {
         this.carryingAmount = Math.min(this.carryCapacity, this.carryingAmount + enemy.carryingAmount);
         this.state = AntState.RETURNING; // Switch to returning if we got food
         enemy.carryingAmount = 0;
       }
 
-      this.energy = Math.min(this.energyCapacity, this.energy + CONFIG.COMBAT_ENERGY_REWARD);
+      // Restore health for both roles
+      this.health = Math.min(this.maxHealth, this.health + CONFIG.COMBAT_HEALTH_REWARD);
+
       this.isInCombat = false;
       this.combatTarget = null;
     }
 
-    // Check if we died
-    if (this.energy <= 0) {
+    // Check if we died (both roles use health)
+    if (this.health <= 0) {
       this.isDead = true;
 
       // Drop food if carrying

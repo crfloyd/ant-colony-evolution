@@ -12,6 +12,13 @@ interface GenePoolEntry {
   weight: number; // Based on food delivered
 }
 
+/** Colony-level genome - strategic traits that define colony behavior */
+export interface ColonyGenome {
+  scoutRatio: number;        // 0.05-0.60 - Percentage of new spawns that are scouts
+  aggression: number;        // 0.0-1.0 - How likely to pursue enemies (future use)
+  explorationRange: number;  // 0.5-2.0 - Scout distance multiplier (future use)
+}
+
 export class Colony implements Entity {
   public position: Vector2;
   public sprite: Container;
@@ -19,6 +26,9 @@ export class Colony implements Entity {
   public ants: Ant[] = [];
   public generation: number = 1;
   public kills: number = 0; // Track enemy ants killed
+
+  // Colony-level genome (strategic evolution)
+  public genome: ColonyGenome;
 
   private moundSprite: Sprite | null = null;
   private pheromoneGrid: PheromoneGrid;
@@ -52,6 +62,13 @@ export class Colony implements Entity {
     this.metrics = metrics || null;
     this.foragerTextures = foragerTextures || null;
     this.scoutTextures = scoutTextures || null;
+
+    // Initialize colony genome with baseline values
+    this.genome = {
+      scoutRatio: 0.20,        // Start at 20% scouts (old hardcoded value)
+      aggression: 0.5,         // Neutral starting aggression
+      explorationRange: 1.0    // Normal exploration range
+    };
 
     // Seed gene pool with some initial diversity
     this.seedGenePool();
@@ -113,11 +130,22 @@ export class Colony implements Entity {
       y: this.position.y + Math.sin(angle) * distance,
     };
 
-    // Determine role: if not specified, use CONFIG.SCOUT_SPAWN_RATIO
-    const antRole = role || (Math.random() < CONFIG.SCOUT_SPAWN_RATIO ? AntRole.SCOUT : AntRole.FORAGER);
+    // Determine role: if not specified, use colony's evolved scout ratio
+    const antRole = role || (Math.random() < this.genome.scoutRatio ? AntRole.SCOUT : AntRole.FORAGER);
 
     // Sample traits from gene pool (with or without mutation)
-    const traits = skipMutation ? createDefaultTraits() : this.sampleGenePool();
+    const traits = skipMutation ? createDefaultTraits() : this.sampleGenePool(antRole);
+
+    // Mutate colony genome on every spawn (continuous evolution)
+    if (!skipMutation) {
+      const scoutRatioMutation = (Math.random() - 0.5) * 0.01; // ±0.5% per spawn
+      const aggressionMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
+      const explorationMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
+
+      this.genome.scoutRatio = Math.max(0.05, Math.min(0.60, this.genome.scoutRatio + scoutRatioMutation));
+      this.genome.aggression = Math.max(0.0, Math.min(1.0, this.genome.aggression + aggressionMutation));
+      this.genome.explorationRange = Math.max(0.5, Math.min(2.0, this.genome.explorationRange + explorationMutation));
+    }
 
     // Debug: verify initial ants have baseline traits
     if (skipMutation && this.ants.length < 3) {
@@ -134,7 +162,8 @@ export class Colony implements Entity {
       traits,
       this.foragerTextures,
       this.scoutTextures,
-      () => this.recordKill() // Kill callback
+      () => this.recordKill(), // Kill callback
+      this.generation // Colony generation
     );
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
@@ -242,6 +271,25 @@ export class Colony implements Entity {
     this.ants = this.ants.slice(0, keepCount);
 
     this.generation++;
+
+    // Note: Genome mutation now happens continuously on every spawn (see spawnAnt method)
+    // No need for large mutations here anymore
+  }
+
+  private mutateGenome(): void {
+    // DEPRECATED: Genome now mutates continuously on every spawn
+    // This method kept for reference but no longer called
+    // Mutation rates for colony traits
+    const scoutRatioMutation = (Math.random() - 0.5) * 0.10; // ±5% per generation
+    const aggressionMutation = (Math.random() - 0.5) * 0.20; // ±10% per generation
+    const explorationMutation = (Math.random() - 0.5) * 0.20; // ±10% per generation
+
+    // Apply mutations with clamping
+    this.genome.scoutRatio = Math.max(0.05, Math.min(0.60, this.genome.scoutRatio + scoutRatioMutation));
+    this.genome.aggression = Math.max(0.0, Math.min(1.0, this.genome.aggression + aggressionMutation));
+    this.genome.explorationRange = Math.max(0.5, Math.min(2.0, this.genome.explorationRange + explorationMutation));
+
+    console.log(`Gen ${this.generation} Genome Mutation: scoutRatio=${(this.genome.scoutRatio * 100).toFixed(1)}%, aggression=${(this.genome.aggression * 100).toFixed(0)}%, exploration=${this.genome.explorationRange.toFixed(2)}x`);
   }
 
   public getAntCount(): number {
@@ -274,7 +322,7 @@ export class Colony implements Entity {
   }
 
   /** Sample traits from gene pool (weighted random selection with mutation) */
-  private sampleGenePool(): AntTraits {
+  private sampleGenePool(role: AntRole): AntTraits {
     // If gene pool is empty, return default traits
     if (this.genePool.length === 0) {
       return createDefaultTraits();
@@ -290,12 +338,12 @@ export class Colony implements Entity {
     for (const entry of this.genePool) {
       cumulative += entry.weight;
       if (random <= cumulative) {
-        // Found the selected traits - apply mutation and return
-        const mutated = mutateTraits(entry.traits, CONFIG.MUTATION_RATE);
+        // Found the selected traits - apply mutation and return (role-specific mutation)
+        const mutated = mutateTraits(entry.traits, role);
 
         // Debug: log first 5 spawns to verify mutation diversity
         if (this.ants.length < 5 && this.ants.length >= CONFIG.INITIAL_ANT_COUNT) {
-          console.log(`Offspring ${this.ants.length - CONFIG.INITIAL_ANT_COUNT + 1} traits:`, mutated);
+          console.log(`Offspring ${this.ants.length - CONFIG.INITIAL_ANT_COUNT + 1} (${role}) traits:`, mutated);
         }
 
         return mutated;
@@ -303,7 +351,7 @@ export class Colony implements Entity {
     }
 
     // Fallback (shouldn't reach here)
-    return mutateTraits(this.genePool[this.genePool.length - 1].traits, 0.005);
+    return mutateTraits(this.genePool[this.genePool.length - 1].traits, role);
   }
 
   /** Get average traits of current population (for UI display) */
@@ -316,14 +364,28 @@ export class Colony implements Entity {
       speedMultiplier: acc.speedMultiplier + ant.traits.speedMultiplier,
       visionMultiplier: acc.visionMultiplier + ant.traits.visionMultiplier,
       efficiencyMultiplier: acc.efficiencyMultiplier + ant.traits.efficiencyMultiplier,
-      carryMultiplier: acc.carryMultiplier + ant.traits.carryMultiplier
-    }), { speedMultiplier: 0, visionMultiplier: 0, efficiencyMultiplier: 0, carryMultiplier: 0 });
+      carryMultiplier: acc.carryMultiplier + ant.traits.carryMultiplier,
+      maxHealthMultiplier: acc.maxHealthMultiplier + ant.traits.maxHealthMultiplier,
+      dpsMultiplier: acc.dpsMultiplier + ant.traits.dpsMultiplier,
+      healthRegenMultiplier: acc.healthRegenMultiplier + ant.traits.healthRegenMultiplier
+    }), {
+      speedMultiplier: 0,
+      visionMultiplier: 0,
+      efficiencyMultiplier: 0,
+      carryMultiplier: 0,
+      maxHealthMultiplier: 0,
+      dpsMultiplier: 0,
+      healthRegenMultiplier: 0
+    });
 
     const averages = {
       speedMultiplier: sum.speedMultiplier / this.ants.length,
       visionMultiplier: sum.visionMultiplier / this.ants.length,
       efficiencyMultiplier: sum.efficiencyMultiplier / this.ants.length,
-      carryMultiplier: sum.carryMultiplier / this.ants.length
+      carryMultiplier: sum.carryMultiplier / this.ants.length,
+      maxHealthMultiplier: sum.maxHealthMultiplier / this.ants.length,
+      dpsMultiplier: sum.dpsMultiplier / this.ants.length,
+      healthRegenMultiplier: sum.healthRegenMultiplier / this.ants.length
     };
 
     return averages;
