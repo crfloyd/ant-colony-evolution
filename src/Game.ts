@@ -763,31 +763,15 @@ export class Game {
 
       obstacleInfo = `
         <div class="debug-row">
-          <span class="debug-label">Edge dist:</span>
+          <span class="debug-label">Distance:</span>
           <span class="${clearanceClass}">${closest.edgeDist.toFixed(1)}px${colliding ? ' [COLLIDING]' : ''}</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Center:</span>
-          <span class="debug-value">${closest.centerDist.toFixed(1)}px</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Type:</span>
-          <span class="debug-value">${closest.obs.sizeCategory}</span>
         </div>
       `;
     } else {
       obstacleInfo = `
         <div class="debug-row">
-          <span class="debug-label">Edge dist:</span>
+          <span class="debug-label">Distance:</span>
           <span class="debug-value">None within ${searchRadius}px</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Center:</span>
-          <span class="debug-value">-</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Type:</span>
-          <span class="debug-value">-</span>
         </div>
       `;
     }
@@ -856,83 +840,49 @@ export class Game {
         <span class="debug-label">Scout State:</span>
         <span class="debug-value">${ant.scoutState}</span>
       </div>
-      ${ant.guardingFoodId ? `
-      <div class="debug-row">
-        <span class="debug-label">Guarding Food:</span>
-        <span class="debug-value">${ant.guardingFoodId}</span>
-      </div>
-      <div class="debug-row">
-        <span class="debug-label">Guard Duration:</span>
-        <span class="debug-value">${((Date.now() - ant.guardStartTime) / 1000).toFixed(1)}s</span>
-      </div>
-      ` : ''}
-      ` : ''}
-      <div class="debug-row">
-        <span class="debug-label">Energy:</span>
-        <span class="debug-value">${ant.energy.toFixed(1)} / ${ant.energyCapacity}</span>
-      </div>
-      ${ant.role === 'SCOUT' ? `
-      <div class="debug-row">
-        <span class="debug-label">Health:</span>
-        <span class="debug-value">${ant.health.toFixed(1)} / ${ant.maxHealth}</span>
-      </div>
       ` : ''}
       <div class="debug-row">
         <span class="debug-label">Carrying:</span>
         <span class="debug-value">${ant.carryingAmount} / ${ant.carryCapacity}</span>
       </div>
 
-      <details>
-        <summary class="debug-section-title">Behavior</summary>
-        <div class="debug-row">
-          <span class="debug-label">Stuck counter:</span>
-          <span class="${stuckClass}">${ant.stuckCounter.toFixed(2)}s (triggers at > 1.0s)</span>
+      <!-- Energy Bar -->
+      <div class="debug-row" style="margin-top: 8px;">
+        <span class="debug-label">⚡ Energy:</span>
+        <span class="debug-value">${ant.energy.toFixed(0)} / ${ant.energyCapacity}</span>
+      </div>
+      <div style="width: 100%; height: 20px; background: #333; border-radius: 4px; overflow: hidden; position: relative; margin-top: 4px;">
+        <div style="width: ${(ant.energy / ant.energyCapacity * 100)}%; height: 100%; background: linear-gradient(90deg, #ffaa00 0%, #ff6600 100%); transition: width 0.2s;"></div>
+        ${ant.traits.efficiencyMultiplier !== 1.0 ? `
+        <div style="position: absolute; top: 2px; right: 4px; font-size: 10px; font-weight: bold; color: ${ant.traits.efficiencyMultiplier > 1.0 ? '#00ff00' : '#ff4444'}; text-shadow: 0 0 3px #000;">
+          ${ant.traits.efficiencyMultiplier > 1.0 ? '+' : ''}${((ant.traits.efficiencyMultiplier - 1.0) * 100).toFixed(0)}% ⚙️
         </div>
-        <div class="debug-row">
-          <span class="debug-label">Recovery cooldown:</span>
-          <span class="debug-value">${(ant.unstuckRecoveryCooldown || 0).toFixed(2)}s</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Ignore pheromones:</span>
-          <span class="debug-value">${(ant.ignorePheromoneTimer || 0).toFixed(2)}s</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Dist moved:</span>
-          <span class="debug-value">${(ant.lastDistMoved || 0).toFixed(3)}</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Depenetration:</span>
-          <span class="debug-value">${(ant.depenetrationDistThisFrame || 0).toFixed(3)}</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Real movement:</span>
-          <span class="debug-value">${Math.max(0, (ant.lastDistMoved || 0) - (ant.depenetrationDistThisFrame || 0)).toFixed(3)}</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Exploration:</span>
-          <span class="debug-value">${ant.explorationCommitment.toFixed(2)}s</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">On trail:</span>
-          <span class="debug-value">${ant.onFoodTrail}</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Trail latch:</span>
-          <span class="debug-value">${ant.trailLatchTimer.toFixed(2)}s</span>
-        </div>
-        <div class="debug-row">
-          <span class="debug-label">Trail lock:</span>
-          <span class="${ant.trailLockTimer > 0 ? 'debug-warning' : 'debug-value'}">${ant.trailLockTimer > 0 ? ant.trailLockTimer.toFixed(1) + 's' : 'None'}</span>
-        </div>
-      </details>
+        ` : ''}
+      </div>
 
-      <div class="debug-section-title">Pheromones</div>
+      ${ant.role === 'SCOUT' ? `
+      <!-- Health Bar -->
+      <div class="debug-row" style="margin-top: 8px;">
+        <span class="debug-label">❤️ Health:</span>
+        <span class="debug-value">${ant.health.toFixed(0)} / ${ant.maxHealth.toFixed(0)}</span>
+      </div>
+      <div style="width: 100%; height: 20px; background: #333; border-radius: 4px; overflow: hidden; position: relative; margin-top: 4px;">
+        <div style="width: ${(ant.health / ant.maxHealth * 100)}%; height: 100%; background: linear-gradient(90deg, #ff4444 0%, #44ff44 50%, #44ff44 100%); transition: width 0.2s;"></div>
+        ${ant.traits.maxHealthMultiplier !== 1.0 ? `
+        <div style="position: absolute; top: 2px; right: 4px; font-size: 10px; font-weight: bold; color: ${ant.traits.maxHealthMultiplier > 1.0 ? '#00ff00' : '#ff4444'}; text-shadow: 0 0 3px #000;">
+          ${ant.traits.maxHealthMultiplier > 1.0 ? '+' : ''}${((ant.traits.maxHealthMultiplier - 1.0) * 100).toFixed(0)}% 💪
+        </div>
+        ` : ''}
+      </div>
+      ` : ''}
+
+      <div class="debug-section-title" style="margin-top: 12px;">Pheromones</div>
       <div class="debug-row">
-        <span class="debug-label">Food:</span>
+        <span class="debug-label">🍎 Food:</span>
         <span class="debug-value">${foodPher.toFixed(3)}</span>
       </div>
       <div class="debug-row">
-        <span class="debug-label">Home:</span>
+        <span class="debug-label">🏠 Home:</span>
         <span class="debug-value">${homePher.toFixed(3)}</span>
       </div>
 
