@@ -19,6 +19,15 @@ export const SCOUT_MUTATION_RATE = 0.005; // Scouts mutate faster (0.5% change p
 export const TRAIT_MIN = 0.7; // Minimum trait multiplier
 export const TRAIT_MAX = 1.3; // Maximum trait multiplier
 
+// Trait Tradeoffs (energy costs for having better stats)
+export const TRAIT_ENERGY_COST_SPEED = 1.8; // Fast ants burn 80% more energy at max
+export const TRAIT_ENERGY_COST_VISION = 1.3; // Better vision costs 30% more at max
+export const TRAIT_ENERGY_COST_CARRY = 0.85; // Heavy carriers are slower (speed penalty)
+export const TRAIT_ENERGY_COST_MAX_HEALTH = 1.2; // Bigger bodies need 20% more energy at max
+
+// Fitness Budget (prevents super-ants by capping total power)
+export const TRAIT_BUDGET = 7.0; // Sum of all 7 traits (avg = 1.0 each, allows some variance)
+
 // Spawning Settings
 export const FOOD_COST_TO_SPAWN = 3; // Base cost (scales +50% per 100 ants: 3 → 5 → 8 → 12 → 17...)
 

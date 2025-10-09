@@ -35,6 +35,15 @@ export class Colony implements Entity {
   // Colony-level genome (strategic evolution)
   public genome: ColonyGenome;
 
+  // Performance tracking for genome evolution with selective pressure
+  private lastFoodEvaluation: number = 0; // Food stored at last evaluation
+  private lastEvaluationTime: number = 0; // Time of last evaluation (simulation time)
+  private foodIncomeRate: number = 0; // Food gained per minute
+  private lastScoutRatioMutation: number = 0; // Track last mutation direction
+  private lastAggressionMutation: number = 0;
+  private lastExplorationMutation: number = 0;
+  private readonly EVALUATION_INTERVAL: number = 60; // Evaluate every 60 seconds
+
   private moundSprite: Sprite | null = null;
   private pheromoneGrid: PheromoneGrid;
   private worldContainer: Container | null = null;
@@ -142,9 +151,10 @@ export class Colony implements Entity {
     // Sample traits from gene pool (with or without mutation)
     let traits = skipMutation ? createDefaultTraits() : this.sampleGenePool(antRole);
 
-    // Apply crisis bonuses to stats (additive bonuses)
+    // Apply crisis bonuses to stats (compound multipliers for smoother scaling)
     if (this.crisisBonus > 0 && !skipMutation) {
-      const bonusMultiplier = 1 + (this.crisisBonus * CONFIG.CRISIS_STAT_BONUS_PER_STACK);
+      // Use 1.05^crisisBonus for smooth compound growth (5% per "stack")
+      const bonusMultiplier = Math.pow(1.05, this.crisisBonus);
       traits = {
         speedMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.speedMultiplier * bonusMultiplier),
         visionMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.visionMultiplier * bonusMultiplier),
@@ -156,15 +166,15 @@ export class Colony implements Entity {
       };
     }
 
-    // Mutate colony genome on every spawn (continuous evolution)
+    // Mutate colony genome on every spawn (with selective pressure - stored for evaluation)
     if (!skipMutation) {
-      const scoutRatioMutation = (Math.random() - 0.5) * 0.01; // ±0.5% per spawn
-      const aggressionMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
-      const explorationMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
+      this.lastScoutRatioMutation = (Math.random() - 0.5) * 0.01; // ±0.5% per spawn
+      this.lastAggressionMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
+      this.lastExplorationMutation = (Math.random() - 0.5) * 0.02; // ±1% per spawn
 
-      this.genome.scoutRatio = Math.max(0.05, Math.min(0.60, this.genome.scoutRatio + scoutRatioMutation));
-      this.genome.aggression = Math.max(0.0, Math.min(1.0, this.genome.aggression + aggressionMutation));
-      this.genome.explorationRange = Math.max(0.5, Math.min(2.0, this.genome.explorationRange + explorationMutation));
+      this.genome.scoutRatio = Math.max(0.05, Math.min(0.60, this.genome.scoutRatio + this.lastScoutRatioMutation));
+      this.genome.aggression = Math.max(0.0, Math.min(1.0, this.genome.aggression + this.lastAggressionMutation));
+      this.genome.explorationRange = Math.max(0.5, Math.min(2.0, this.genome.explorationRange + this.lastExplorationMutation));
     }
 
     // Debug: verify initial ants have baseline traits
@@ -202,28 +212,40 @@ export class Colony implements Entity {
     }
   }
 
-  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, viewportBounds?: { x: number; y: number; width: number; height: number }, enemyAnts?: Ant[]): void {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, viewportBounds?: { x: number; y: number; width: number; height: number }, enemyAnts?: Ant[], simulationTime?: number): void {
     // Track peak population
     const currentPopulation = this.ants.length;
     if (currentPopulation > this.peakPopulation) {
       this.peakPopulation = currentPopulation;
     }
 
+    // Evaluate genome performance periodically (every 60 seconds)
+    if (simulationTime && simulationTime - this.lastEvaluationTime >= this.EVALUATION_INTERVAL) {
+      const timeDelta = simulationTime - this.lastEvaluationTime;
+      const foodGained = this.foodStored - this.lastFoodEvaluation;
+      this.foodIncomeRate = (foodGained / timeDelta) * 60; // Food per minute
+
+      // Only evaluate if we've had at least one interval
+      if (this.lastEvaluationTime > 0) {
+        this.evaluateGenomePerformance();
+      }
+
+      // Update for next evaluation
+      this.lastFoodEvaluation = this.foodStored;
+      this.lastEvaluationTime = simulationTime;
+    }
+
     // Crisis evolution: Check if colony is in crisis (below 30% of peak)
     const crisisThreshold = this.peakPopulation * CONFIG.CRISIS_POPULATION_THRESHOLD;
     const inCrisis = currentPopulation < crisisThreshold && this.peakPopulation >= 10; // Only trigger if we had at least 10 ants
 
+    // Smooth crisis bonus (floating point instead of discrete stacks)
     if (inCrisis && this.crisisBonus < CONFIG.CRISIS_MAX_BONUS_STACKS) {
-      // Increase crisis bonus (gradually, not instantly)
-      // Check every ~5 seconds if still in crisis
-      if (Math.random() < 0.001) { // ~6% chance per second at 60fps
-        this.crisisBonus = Math.min(CONFIG.CRISIS_MAX_BONUS_STACKS, this.crisisBonus + 1);
-      }
+      // Gradual increase: +0.01 per frame = full stack in ~6 seconds at 60fps
+      this.crisisBonus = Math.min(CONFIG.CRISIS_MAX_BONUS_STACKS, this.crisisBonus + 0.01);
     } else if (!inCrisis && this.crisisBonus > 0) {
-      // Recovered from crisis - slowly reduce bonus
-      if (Math.random() < 0.0005) { // ~3% chance per second at 60fps
-        this.crisisBonus = Math.max(0, this.crisisBonus - 1);
-      }
+      // Very slow decay: -0.001 per frame = full stack lost in ~60 seconds
+      this.crisisBonus = Math.max(0, this.crisisBonus - 0.001);
     }
 
     // Spawn new ant when enough food stored (cost scales with population)
@@ -252,10 +274,17 @@ export class Colony implements Entity {
 
       // Remove dead ants and add their genes to pool based on lifetime performance
       if (!ant.isAlive()) {
-        // Add ant's traits to gene pool weighted by TOTAL food delivered over lifetime
-        // This creates true selective pressure: fast ants make more trips, efficient ants live longer
-        if (ant.foodDelivered > 0) {
-          this.addToGenePool(ant.traits, ant.foodDelivered, ant.generation);
+        // Calculate efficiency-based fitness: food delivered per energy consumed
+        // This rewards efficient ants, not just old ones that got lucky
+        if (ant.foodDelivered > 0 && ant.totalEnergyConsumed > 0) {
+          // Fitness = food per energy unit (e.g., 10 food / 500 energy = 0.02 fitness)
+          // Scale up by 100x to make weights more meaningful for selection
+          const efficiencyFitness = (ant.foodDelivered / ant.totalEnergyConsumed) * 100;
+          this.addToGenePool(ant.traits, efficiencyFitness, ant.generation, ant.role);
+        } else if (ant.foodDelivered > 0) {
+          // Fallback for scouts (no energy consumption): use food/age as fitness
+          const timeFitness = ant.foodDelivered / Math.max(1, ant.age);
+          this.addToGenePool(ant.traits, timeFitness, ant.generation, ant.role);
         }
         ant.destroy();
         this.ants.splice(i, 1);
@@ -279,9 +308,17 @@ export class Colony implements Entity {
         // Successful ants retire after delivering significant food (add genes to pool)
         // This ensures genes enter the pool from successful ants, not just dead ones
         if (ant.foodDelivered >= 10) { // Retire after 10 units delivered (5-10 trips)
-          this.addToGenePool(ant.traits, ant.foodDelivered, ant.generation);
-          // Reset counter so they can contribute again later
+          // Calculate efficiency-based fitness for living ants too
+          let fitness = ant.foodDelivered;
+          if (ant.totalEnergyConsumed > 0) {
+            fitness = (ant.foodDelivered / ant.totalEnergyConsumed) * 100;
+          } else if (ant.age > 0) {
+            fitness = ant.foodDelivered / ant.age;
+          }
+          this.addToGenePool(ant.traits, fitness, ant.generation, ant.role);
+          // Reset counters so they can contribute again later
           ant.foodDelivered = 0;
+          ant.totalEnergyConsumed = 0;
         }
 
         // Record metrics
@@ -331,11 +368,29 @@ export class Colony implements Entity {
     this.kills++;
   }
 
+  /** Calculate specialized fitness bonus for role-appropriate traits */
+  private calculateSpecializationBonus(traits: AntTraits, role: AntRole): number {
+    if (role === AntRole.FORAGER) {
+      // Foragers benefit from carry capacity and efficiency
+      return (traits.carryMultiplier + traits.efficiencyMultiplier) / 2.0;
+    } else {
+      // Scouts benefit from vision, speed, and combat stats
+      return (traits.visionMultiplier + traits.speedMultiplier + traits.dpsMultiplier + traits.maxHealthMultiplier) / 4.0;
+    }
+  }
+
   /** Add traits to gene pool with performance-based weighting */
-  private addToGenePool(traits: AntTraits, weight: number, generation: number): void {
+  private addToGenePool(traits: AntTraits, weight: number, generation: number, role?: AntRole): void {
+    // Apply specialization bonus if role is provided
+    let adjustedWeight = weight;
+    if (role) {
+      const specializationBonus = this.calculateSpecializationBonus(traits, role);
+      adjustedWeight = weight * specializationBonus; // Multiply fitness by role appropriateness
+    }
+
     this.genePool.push({
       traits: copyTraits(traits),
-      weight: weight,
+      weight: adjustedWeight,
       generation: generation
     });
 
@@ -354,13 +409,30 @@ export class Colony implements Entity {
     return maxGeneration + 1;
   }
 
-  /** Calculate food cost to spawn new ant (scales with population) */
+  /** Calculate food cost to spawn new ant (scales with population and food scarcity) */
   private calculateFoodCost(): number {
     const baseCost = CONFIG.FOOD_COST_TO_SPAWN; // 3
     const population = this.ants.length;
+
+    // Population scaling: +50% per 100 ants
     const hundredsOfAnts = Math.floor(population / 100);
-    // +50% per 100 ants: cost = base * (1.5 ^ hundredsOfAnts)
-    return Math.ceil(baseCost * Math.pow(1.5, hundredsOfAnts));
+    const populationMultiplier = Math.pow(1.5, hundredsOfAnts);
+
+    // Scarcity scaling: cost based on food-per-ant ratio
+    // High food per ant = cheap spawns (0.5x cost)
+    // Low food per ant = expensive spawns (2.0x cost)
+    const foodPerAnt = this.foodStored / Math.max(1, population);
+    let scarcityMultiplier = 1.0;
+
+    if (foodPerAnt > 3.0) {
+      // Abundant food: 50% discount
+      scarcityMultiplier = 0.5;
+    } else if (foodPerAnt < 1.0) {
+      // Scarce food: 2x more expensive
+      scarcityMultiplier = Math.max(1.0, 3.0 / Math.max(0.1, foodPerAnt)); // Up to 3x cost when very scarce
+    }
+
+    return Math.ceil(baseCost * populationMultiplier * scarcityMultiplier);
   }
 
   /** Sample traits from gene pool (weighted random selection with mutation) */
@@ -458,6 +530,31 @@ export class Colony implements Entity {
       efficiency: Math.round((counts.efficiency / this.ants.length) * 100),
       carry: Math.round((counts.carry / this.ants.length) * 100)
     };
+  }
+
+  /** Evaluate genome performance and apply selective pressure */
+  private evaluateGenomePerformance(): void {
+    // Target: aim for positive food income (food per minute > spawn cost per minute)
+    // Rough estimate: colony needs ~1-2 food/min per 10 ants to maintain population
+    const targetIncome = (this.ants.length / 10) * 1.5; // 1.5 food/min per 10 ants
+
+    const performanceRatio = this.foodIncomeRate / Math.max(0.1, targetIncome);
+
+    // Success = income > target (ratio > 1.0)
+    // Failure = income < target (ratio < 1.0)
+
+    if (performanceRatio > 1.1) {
+      // Success! Reinforce recent mutations (push further in same direction)
+      this.genome.scoutRatio = Math.max(0.05, Math.min(0.60,
+        this.genome.scoutRatio + this.lastScoutRatioMutation * 1.5));
+      console.log(`📈 Colony thriving (${this.foodIncomeRate.toFixed(1)} food/min) - reinforcing genome`);
+    } else if (performanceRatio < 0.9) {
+      // Failure! Reverse recent mutations (try opposite direction)
+      this.genome.scoutRatio = Math.max(0.05, Math.min(0.60,
+        this.genome.scoutRatio - this.lastScoutRatioMutation * 2.0));
+      console.log(`📉 Colony struggling (${this.foodIncomeRate.toFixed(1)} food/min) - reversing genome`);
+    }
+    // Middle range (0.9-1.1): neutral, keep exploring
   }
 
   public destroy(): void {

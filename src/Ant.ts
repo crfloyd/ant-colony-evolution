@@ -40,6 +40,28 @@ export function createDefaultTraits(): AntTraits {
 }
 
 /** Helper to mutate traits with small random changes */
+/** Normalize traits to fit within the fitness budget (prevents super-ants) */
+function normalizeTraitsToBudget(traits: AntTraits): AntTraits {
+  const sum = traits.speedMultiplier + traits.visionMultiplier + traits.efficiencyMultiplier +
+               traits.carryMultiplier + traits.maxHealthMultiplier + traits.dpsMultiplier +
+               traits.healthRegenMultiplier;
+
+  // If sum exceeds budget, scale down all traits proportionally
+  if (sum > CONFIG.TRAIT_BUDGET) {
+    const scale = CONFIG.TRAIT_BUDGET / sum;
+    return {
+      speedMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.speedMultiplier * scale),
+      visionMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.visionMultiplier * scale),
+      efficiencyMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.efficiencyMultiplier * scale),
+      carryMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.carryMultiplier * scale),
+      maxHealthMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.maxHealthMultiplier * scale),
+      dpsMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.dpsMultiplier * scale),
+      healthRegenMultiplier: Math.max(CONFIG.TRAIT_MIN, traits.healthRegenMultiplier * scale)
+    };
+  }
+  return traits;
+}
+
 export function mutateTraits(parent: AntTraits, role: AntRole, mutationRate?: number): AntTraits {
   // Use role-specific mutation rate if not specified
   const actualMutationRate = mutationRate !== undefined
@@ -51,7 +73,7 @@ export function mutateTraits(parent: AntTraits, role: AntRole, mutationRate?: nu
     return Math.max(CONFIG.TRAIT_MIN, Math.min(CONFIG.TRAIT_MAX, value + change)); // Clamp to 0.7-1.3
   };
 
-  return {
+  const mutated = {
     speedMultiplier: mutate(parent.speedMultiplier),
     visionMultiplier: mutate(parent.visionMultiplier),
     efficiencyMultiplier: mutate(parent.efficiencyMultiplier),
@@ -63,6 +85,9 @@ export function mutateTraits(parent: AntTraits, role: AntRole, mutationRate?: nu
     // Health regen only mutates for scouts (foragers don't use it as much)
     healthRegenMultiplier: role === AntRole.SCOUT ? mutate(parent.healthRegenMultiplier) : parent.healthRegenMultiplier
   };
+
+  // Apply fitness budget normalization to prevent super-ants
+  return normalizeTraitsToBudget(mutated);
 }
 
 /** Helper to copy traits */
@@ -88,6 +113,7 @@ export class Ant implements Entity {
   public id: string = Math.random().toString(36).substr(2, 9); // Unique ID for debugging
   public static selectedAntId: string | null = null; // Static field for selected ant
   public foodDelivered: number = 0; // Total food delivered (for gene pool weighting)
+  public totalEnergyConsumed: number = 0; // Total energy consumed over lifetime (for fitness metrics)
   public generation: number = 1; // Colony generation when ant was born
 
   // Trait visualization mode (toggled from UI)
@@ -212,7 +238,11 @@ public stuckCounter: number = 0;
     // Apply trait multipliers to base stats
     // Scouts are 20% faster than foragers (they're lighter and built for exploration)
     const roleSpeedMultiplier = role === AntRole.SCOUT ? 1.2 : 1.0;
-    this.maxSpeed = CONFIG.ANT_MAX_SPEED * this.traits.speedMultiplier * roleSpeedMultiplier;
+
+    // Carry capacity tradeoff: heavier carriers are slower (0.85x at max carry, 1.15x at min carry)
+    const carryPenalty = Math.pow(CONFIG.TRAIT_ENERGY_COST_CARRY, this.traits.carryMultiplier - 1.0);
+
+    this.maxSpeed = CONFIG.ANT_MAX_SPEED * this.traits.speedMultiplier * roleSpeedMultiplier * carryPenalty;
 
     // Set carry capacity based on role and traits
     // Scouts: 1 unit (light and fast)
@@ -567,8 +597,9 @@ public stuckCounter: number = 0;
       const size = CONFIG.ANT_SIZE;
 
       // Ant body (main circle)
+      const antColor = this.role === AntRole.SCOUT ? 0xff6666 : 0xff6644;
       this.graphics.circle(0, 0, size);
-      this.graphics.fill(color);
+      this.graphics.fill({ color: antColor });
 
       // Add a darker center for depth
       this.graphics.circle(0, 0, size * 0.6);
@@ -668,7 +699,17 @@ public stuckCounter: number = 0;
     if (this.role === AntRole.FORAGER) {
       const energyMultiplier = this.hasFood ? 0.2 : 1.0; // 80% reduction when carrying food
       const efficiencyFactor = 1.0 / this.traits.efficiencyMultiplier;
-      this.energy -= CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier * efficiencyFactor;
+
+      // Trait tradeoffs: better stats cost more energy
+      // Map trait values (0.7-1.3) to cost multipliers using the configured costs
+      const speedCost = Math.pow(CONFIG.TRAIT_ENERGY_COST_SPEED, this.traits.speedMultiplier - 1.0);
+      const visionCost = Math.pow(CONFIG.TRAIT_ENERGY_COST_VISION, this.traits.visionMultiplier - 1.0);
+      const maxHealthCost = Math.pow(CONFIG.TRAIT_ENERGY_COST_MAX_HEALTH, this.traits.maxHealthMultiplier - 1.0);
+      const traitCostMultiplier = speedCost * visionCost * maxHealthCost;
+
+      const energyDrain = CONFIG.ANT_ENERGY_DRAIN * cappedDelta * energyMultiplier * efficiencyFactor * traitCostMultiplier;
+      this.energy -= energyDrain;
+      this.totalEnergyConsumed += energyDrain;
 
       // Foragers die from starvation
       if (this.energy <= 0) {

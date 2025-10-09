@@ -1608,7 +1608,7 @@ Notes:
         }
       }
 
-      colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager, viewportBounds, enemyAnts);
+      colony.update(adjustedDelta, this.foodManager.getFoodSources(), this.obstacleManager, viewportBounds, enemyAnts, this.simulationTime);
     }
     timings.colony = performance.now() - t;
 
@@ -1727,7 +1727,7 @@ Notes:
     this.fpsEl.textContent = Math.round(this.currentFPS).toString();
 
     // Update generation list if panel is open (throttled to every 30 frames)
-    if (this.frameCount % 30 === 0) {
+    if (this.frameCounter % 30 === 0) {
       const genListPanel = document.getElementById('genListPanel');
       if (genListPanel && genListPanel.style.display !== 'none') {
         this.updateGenerationList();
