@@ -39,6 +39,10 @@
                 <span class="stat-icon">⚔️</span>
                 <span class="stat-value" id="blackKills">0</span>
               </div>
+              <div class="stat-row">
+                <span class="stat-label">Gen:</span>
+                <span class="stat-value" id="blackGeneration">1</span>
+              </div>
             </div>
             <!-- Genome Visualization -->
             <div class="genome-section">
@@ -87,6 +91,10 @@
                 <span class="stat-icon">⚔️</span>
                 <span class="stat-value" id="redKills">0</span>
               </div>
+              <div class="stat-row">
+                <span class="stat-label">Gen:</span>
+                <span class="stat-value" id="redGeneration">1</span>
+              </div>
             </div>
             <!-- Genome Visualization -->
             <div class="genome-section">
@@ -133,6 +141,7 @@
         <div class="utility-controls">
           <button id="rockColliderBtn" class="util-btn">🎯</button>
           <button id="healthBarBtn" class="util-btn" title="Toggle Health Bars (H)">❤️</button>
+          <button id="genListBtn" class="util-btn" title="View Gen 2+ Ants">⭐</button>
           <button id="debugBtn" class="util-btn">🔧</button>
         </div>
 
@@ -161,6 +170,14 @@
         </h3>
         <div id="antDebugContent"></div>
         <button id="sprayDistressBtn" class="util-btn" style="width: 100%; margin-top: 10px; pointer-events: auto;">💀 Spray Distress (Hold)</button>
+      </div>
+
+      <!-- Generation List Panel -->
+      <div id="genListPanel" style="display: none;">
+        <h3>Gen 2+ Ants
+          <button id="closeGenList" style="float: right; cursor: pointer;">✕</button>
+        </h3>
+        <div id="genListContent"></div>
       </div>
 
       <!-- Settings Panel -->

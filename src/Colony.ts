@@ -10,6 +10,7 @@ import * as CONFIG from './config';
 interface GenePoolEntry {
   traits: AntTraits;
   weight: number; // Based on food delivered
+  generation: number; // Generation of the ant that contributed these genes
 }
 
 /** Colony-level genome - strategic traits that define colony behavior */
@@ -26,6 +27,10 @@ export class Colony implements Entity {
   public ants: Ant[] = [];
   public generation: number = 1;
   public kills: number = 0; // Track enemy ants killed
+
+  // Crisis evolution tracking
+  private peakPopulation: number = 0; // Track highest population ever reached
+  public crisisBonus: number = 0; // Stacking stat bonus (0-3 for +0% to +30%)
 
   // Colony-level genome (strategic evolution)
   public genome: ColonyGenome;
@@ -102,7 +107,8 @@ export class Colony implements Entity {
     // Evolution will occur purely through mutations
     this.genePool.push({
       traits: createDefaultTraits(), // All 1.0x
-      weight: 1.0
+      weight: 1.0,
+      generation: 1 // Founders are Gen 1
     });
   }
 
@@ -134,7 +140,21 @@ export class Colony implements Entity {
     const antRole = role || (Math.random() < this.genome.scoutRatio ? AntRole.SCOUT : AntRole.FORAGER);
 
     // Sample traits from gene pool (with or without mutation)
-    const traits = skipMutation ? createDefaultTraits() : this.sampleGenePool(antRole);
+    let traits = skipMutation ? createDefaultTraits() : this.sampleGenePool(antRole);
+
+    // Apply crisis bonuses to stats (additive bonuses)
+    if (this.crisisBonus > 0 && !skipMutation) {
+      const bonusMultiplier = 1 + (this.crisisBonus * CONFIG.CRISIS_STAT_BONUS_PER_STACK);
+      traits = {
+        speedMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.speedMultiplier * bonusMultiplier),
+        visionMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.visionMultiplier * bonusMultiplier),
+        efficiencyMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.efficiencyMultiplier * bonusMultiplier),
+        carryMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.carryMultiplier * bonusMultiplier),
+        maxHealthMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.maxHealthMultiplier * bonusMultiplier),
+        dpsMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.dpsMultiplier * bonusMultiplier),
+        healthRegenMultiplier: Math.min(CONFIG.TRAIT_MAX, traits.healthRegenMultiplier * bonusMultiplier)
+      };
+    }
 
     // Mutate colony genome on every spawn (continuous evolution)
     if (!skipMutation) {
@@ -152,6 +172,14 @@ export class Colony implements Entity {
       console.log(`Initial ant ${this.ants.length + 1} traits:`, traits);
     }
 
+    // Determine generation: founders are Gen 1, offspring inherit from gene pool
+    const antGeneration = skipMutation ? 1 : this.getNextGeneration();
+
+    // Debug: log when spawning gen 2+ ants
+    if (antGeneration >= 2 && !skipMutation) {
+      console.log(`🌟 Spawned Gen ${antGeneration} ${antRole === AntRole.SCOUT ? 'Scout' : 'Forager'} (Total: ${this.ants.length + 1} ants)`);
+    }
+
     const ant = new Ant(
       spawnPos,
       this.position,
@@ -163,23 +191,54 @@ export class Colony implements Entity {
       this.foragerTextures,
       this.scoutTextures,
       () => this.recordKill(), // Kill callback
-      this.generation // Colony generation
+      antGeneration // Hereditary generation (lineage distance from founders)
     );
     this.ants.push(ant);
     this.worldContainer.addChild(ant.sprite);
+
+    // Update colony's generation tracking (for UI display - shows highest generation)
+    if (antGeneration > this.generation) {
+      this.generation = antGeneration;
+    }
   }
 
   public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, viewportBounds?: { x: number; y: number; width: number; height: number }, enemyAnts?: Ant[]): void {
-    // Spawn new ant when enough food stored
-    if (this.foodStored >= CONFIG.FOOD_COST_TO_SPAWN) {
-      this.foodStored -= CONFIG.FOOD_COST_TO_SPAWN;
+    // Track peak population
+    const currentPopulation = this.ants.length;
+    if (currentPopulation > this.peakPopulation) {
+      this.peakPopulation = currentPopulation;
+    }
+
+    // Crisis evolution: Check if colony is in crisis (below 30% of peak)
+    const crisisThreshold = this.peakPopulation * CONFIG.CRISIS_POPULATION_THRESHOLD;
+    const inCrisis = currentPopulation < crisisThreshold && this.peakPopulation >= 10; // Only trigger if we had at least 10 ants
+
+    if (inCrisis && this.crisisBonus < CONFIG.CRISIS_MAX_BONUS_STACKS) {
+      // Increase crisis bonus (gradually, not instantly)
+      // Check every ~5 seconds if still in crisis
+      if (Math.random() < 0.001) { // ~6% chance per second at 60fps
+        this.crisisBonus = Math.min(CONFIG.CRISIS_MAX_BONUS_STACKS, this.crisisBonus + 1);
+      }
+    } else if (!inCrisis && this.crisisBonus > 0) {
+      // Recovered from crisis - slowly reduce bonus
+      if (Math.random() < 0.0005) { // ~3% chance per second at 60fps
+        this.crisisBonus = Math.max(0, this.crisisBonus - 1);
+      }
+    }
+
+    // Spawn new ant when enough food stored (cost scales with population)
+    const foodCost = this.calculateFoodCost();
+    if (this.foodStored >= foodCost) {
+      const beforeFood = this.foodStored;
+      this.foodStored -= foodCost;
       this.spawnAnt();
+      console.log(`👶 SPAWNED ant | Pop: ${this.ants.length} | Cost: ${foodCost} | Food: ${beforeFood.toFixed(1)} → ${this.foodStored.toFixed(1)}`);
     }
 
     // Update all ants every frame
     for (let i = this.ants.length - 1; i >= 0; i--) {
       const ant = this.ants[i];
-      ant.update(deltaTime, foodSources, obstacleManager, enemyAnts);
+      ant.update(deltaTime, foodSources, obstacleManager, enemyAnts, this.ants);
 
       // Viewport culling - hide ants outside visible area (with padding for smooth transitions)
       if (viewportBounds) {
@@ -196,7 +255,7 @@ export class Colony implements Entity {
         // Add ant's traits to gene pool weighted by TOTAL food delivered over lifetime
         // This creates true selective pressure: fast ants make more trips, efficient ants live longer
         if (ant.foodDelivered > 0) {
-          this.addToGenePool(ant.traits, ant.foodDelivered);
+          this.addToGenePool(ant.traits, ant.foodDelivered, ant.generation);
         }
         ant.destroy();
         this.ants.splice(i, 1);
@@ -208,13 +267,19 @@ export class Colony implements Entity {
       if (deliveredAmount > 0) {
         this.foodStored += deliveredAmount;
 
+        // Debug logging
+        if (Math.random() < 0.02) { // Log 2% of deliveries
+          const foodCost = this.calculateFoodCost();
+          console.log(`🍎 +${deliveredAmount} food | Stored: ${this.foodStored.toFixed(1)} | Cost to spawn: ${foodCost} | Pop: ${this.ants.length}`);
+        }
+
         // Track food delivered for gene pool weighting (accumulated over lifetime)
         ant.foodDelivered += deliveredAmount;
 
         // Successful ants retire after delivering significant food (add genes to pool)
         // This ensures genes enter the pool from successful ants, not just dead ones
         if (ant.foodDelivered >= 10) { // Retire after 10 units delivered (5-10 trips)
-          this.addToGenePool(ant.traits, ant.foodDelivered);
+          this.addToGenePool(ant.traits, ant.foodDelivered, ant.generation);
           // Reset counter so they can contribute again later
           ant.foodDelivered = 0;
         }
@@ -229,51 +294,9 @@ export class Colony implements Entity {
         }
       }
 
-      // Check if low-energy ant reached colony to eat
-      if (ant.energy < CONFIG.ANT_LOW_ENERGY_THRESHOLD && ant.state === AntState.FORAGING) {
-        const dx = ant.position.x - this.position.x;
-        const dy = ant.position.y - this.position.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist < CONFIG.COLONY_RETURN_RADIUS && this.foodStored >= 1) {
-          // Ant eats from colony stores
-          const foodToEat = Math.min(1, this.foodStored); // Eat 1 unit
-          this.foodStored -= foodToEat;
-          ant.energy = Math.min(ant.energyCapacity, ant.energy + CONFIG.ANT_ENERGY_FROM_COLONY);
-        }
-      }
     }
 
-    // Check for generation advancement (only when population is too large)
-    if (this.ants.length > CONFIG.MAX_ANT_COUNT) {
-      this.advanceGeneration();
-    }
-  }
-
-  private advanceGeneration(): void {
-    // Natural selection - remove weakest ants
-    console.log(`Generation ${this.generation} → ${this.generation + 1}: Culling ${this.ants.length} ants down to top 50%`);
-
-    this.ants.sort((a, b) => b.energy - a.energy);
-
-    // Keep top survivors based on config ratio
-    const keepCount = Math.floor(this.ants.length * CONFIG.GENERATION_SURVIVAL_RATIO);
-
-    // Add culled ants' genes to pool based on their lifetime performance
-    for (let i = keepCount; i < this.ants.length; i++) {
-      const ant = this.ants[i];
-      if (ant.foodDelivered > 0) {
-        this.addToGenePool(ant.traits, ant.foodDelivered);
-      }
-      ant.destroy();
-    }
-
-    this.ants = this.ants.slice(0, keepCount);
-
-    this.generation++;
-
-    // Note: Genome mutation now happens continuously on every spawn (see spawnAnt method)
-    // No need for large mutations here anymore
+    // No artificial culling - let natural selection work through starvation and combat
   }
 
   private mutateGenome(): void {
@@ -309,16 +332,35 @@ export class Colony implements Entity {
   }
 
   /** Add traits to gene pool with performance-based weighting */
-  private addToGenePool(traits: AntTraits, weight: number): void {
+  private addToGenePool(traits: AntTraits, weight: number, generation: number): void {
     this.genePool.push({
       traits: copyTraits(traits),
-      weight: weight
+      weight: weight,
+      generation: generation
     });
 
     // Trim gene pool if it gets too large (keep most recent entries)
     if (this.genePool.length > this.MAX_GENE_POOL_SIZE) {
       this.genePool.shift(); // Remove oldest entry
     }
+  }
+
+  /** Calculate next generation number based on gene pool (max generation + 1) */
+  private getNextGeneration(): number {
+    if (this.genePool.length === 0) {
+      return 1; // First generation
+    }
+    const maxGeneration = Math.max(...this.genePool.map(entry => entry.generation));
+    return maxGeneration + 1;
+  }
+
+  /** Calculate food cost to spawn new ant (scales with population) */
+  private calculateFoodCost(): number {
+    const baseCost = CONFIG.FOOD_COST_TO_SPAWN; // 3
+    const population = this.ants.length;
+    const hundredsOfAnts = Math.floor(population / 100);
+    // +50% per 100 ants: cost = base * (1.5 ^ hundredsOfAnts)
+    return Math.ceil(baseCost * Math.pow(1.5, hundredsOfAnts));
   }
 
   /** Sample traits from gene pool (weighted random selection with mutation) */
@@ -335,11 +377,17 @@ export class Colony implements Entity {
     const random = Math.random() * totalWeight;
     let cumulative = 0;
 
+    // Apply crisis mutation multiplier if in crisis
+    const baseMutationRate = role === AntRole.SCOUT ? CONFIG.SCOUT_MUTATION_RATE : CONFIG.FORAGER_MUTATION_RATE;
+    const crisisMutationRate = this.crisisBonus > 0
+      ? baseMutationRate * CONFIG.CRISIS_MUTATION_MULTIPLIER
+      : undefined; // Use default if not in crisis
+
     for (const entry of this.genePool) {
       cumulative += entry.weight;
       if (random <= cumulative) {
-        // Found the selected traits - apply mutation and return (role-specific mutation)
-        const mutated = mutateTraits(entry.traits, role);
+        // Found the selected traits - apply mutation and return (role-specific mutation with crisis bonus)
+        const mutated = mutateTraits(entry.traits, role, crisisMutationRate);
 
         // Debug: log first 5 spawns to verify mutation diversity
         if (this.ants.length < 5 && this.ants.length >= CONFIG.INITIAL_ANT_COUNT) {
@@ -351,7 +399,7 @@ export class Colony implements Entity {
     }
 
     // Fallback (shouldn't reach here)
-    return mutateTraits(this.genePool[this.genePool.length - 1].traits, role);
+    return mutateTraits(this.genePool[this.genePool.length - 1].traits, role, crisisMutationRate);
   }
 
   /** Get average traits of current population (for UI display) */

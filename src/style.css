@@ -505,6 +505,98 @@ body {
   line-height: 1.6;
 }
 
+/* Generation List Panel */
+#genListPanel {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(20, 20, 20, 0.95);
+  border: 2px solid rgba(255, 215, 0, 0.4);
+  border-radius: 12px;
+  padding: 12px;
+  width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  font-size: 0.75em;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+#genListPanel h3 {
+  color: #FFD700;
+  font-size: 0.95em;
+  margin: 0 0 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+#closeGenList {
+  background: transparent;
+  border: none;
+  color: #FFD700;
+  font-size: 1.2em;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
+  text-align: center;
+  cursor: pointer;
+}
+
+#closeGenList:hover {
+  color: #fff;
+  background: rgba(255, 215, 0, 0.2);
+  border-radius: 4px;
+}
+
+#genListContent {
+  color: #ccc;
+}
+
+.gen-ant-item {
+  background: rgba(255, 215, 0, 0.1);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.gen-ant-item:hover {
+  background: rgba(255, 215, 0, 0.2);
+  border-color: rgba(255, 215, 0, 0.6);
+  transform: translateX(4px);
+}
+
+.gen-ant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.gen-ant-title {
+  font-weight: 600;
+  color: #FFD700;
+}
+
+.gen-ant-badge {
+  font-size: 1.2em;
+}
+
+.gen-ant-details {
+  font-size: 0.9em;
+  color: #999;
+  line-height: 1.4;
+}
+
+.gen-ant-stat {
+  display: inline-block;
+  margin-right: 10px;
+}
+
 #antDebugContent .debug-row {
   display: flex;
   justify-content: space-between;

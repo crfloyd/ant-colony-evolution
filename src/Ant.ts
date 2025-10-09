@@ -118,6 +118,7 @@ export class Ant implements Entity {
   private traitVisualsContainer: Container | null = null; // Container for all trait visuals
   private combatIndicatorGraphics: Graphics | null = null; // Combat state indicator (red/blue circle)
   private healthBarGraphics: Graphics | null = null; // Health bar displayed above damaged ants
+  private generationIndicatorGraphics: Graphics | null = null; // Generation badge for gen 2+ ants
 
   // Trail tracking for speed visualization
   private trailPositions: Array<{x: number, y: number}> = [];
@@ -287,6 +288,10 @@ public stuckCounter: number = 0;
       // Create health bar graphics
       this.healthBarGraphics = new Graphics();
       this.sprite.addChild(this.healthBarGraphics);
+
+      // Create generation indicator graphics
+      this.generationIndicatorGraphics = new Graphics();
+      this.sprite.addChild(this.generationIndicatorGraphics);
     } else {
       // Fallback to graphics rendering
       this.graphics = new Graphics();
@@ -496,6 +501,38 @@ public stuckCounter: number = 0;
         }
       }
 
+      // Generation indicator - show badge for gen 2+ ants
+      if (this.generationIndicatorGraphics) {
+        this.generationIndicatorGraphics.clear();
+
+        if (this.generation >= 2) {
+          const badgeX = 12; // Right side of ant
+          const badgeY = -12; // Top-right corner
+          const badgeRadius = 6;
+
+          // Background circle (gold for gen 2+)
+          const genColor = this.generation === 2 ? 0xFFD700 : (this.generation === 3 ? 0xFF8C00 : 0xFF4500);
+          this.generationIndicatorGraphics.circle(badgeX, badgeY, badgeRadius);
+          this.generationIndicatorGraphics.fill({ color: genColor, alpha: 0.9 });
+
+          // Border
+          this.generationIndicatorGraphics.circle(badgeX, badgeY, badgeRadius);
+          this.generationIndicatorGraphics.stroke({ width: 1.5, color: 0xFFFFFF, alpha: 1.0 });
+
+          // Star pattern for gen 3+
+          if (this.generation >= 3) {
+            const starSize = 3;
+            this.generationIndicatorGraphics.moveTo(badgeX, badgeY - starSize);
+            this.generationIndicatorGraphics.lineTo(badgeX + starSize * 0.3, badgeY + starSize * 0.3);
+            this.generationIndicatorGraphics.lineTo(badgeX - starSize, badgeY);
+            this.generationIndicatorGraphics.lineTo(badgeX + starSize, badgeY);
+            this.generationIndicatorGraphics.lineTo(badgeX - starSize * 0.3, badgeY + starSize * 0.3);
+            this.generationIndicatorGraphics.closePath();
+            this.generationIndicatorGraphics.fill({ color: 0xFFFFFF, alpha: 0.9 });
+          }
+        }
+      }
+
       // Rotate sprite to match VISUAL heading (where ant wants to go, not micro-adjustments)
       // Add π/2 offset because sprite faces upward by default
       const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
@@ -569,12 +606,12 @@ public stuckCounter: number = 0;
     }
   }
 
-  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, enemyAnts?: Ant[]): void {
+  public update(deltaTime: number, foodSources?: any[], obstacleManager?: any, enemyAnts?: Ant[], friendlyAnts?: Ant[]): void {
     if (this.isDead) return;
 
     // Combat detection and behavior (happens before other behaviors)
     if (enemyAnts && enemyAnts.length > 0) {
-      this.handleCombat(deltaTime, enemyAnts);
+      this.handleCombat(deltaTime, enemyAnts, friendlyAnts);
     }
 
     // Sanity check: if RETURNING with no food, reset to FORAGING
@@ -593,6 +630,36 @@ public stuckCounter: number = 0;
 
     // Update memory: time since last food
     this.timeSinceLastFood += deltaTime;
+
+    // Low-energy ants in FORAGING state: restore energy when reaching colony (FREE, no food cost)
+    // Prevents ants from getting stuck spinning at colony center in panic mode
+    if (this.state === AntState.FORAGING && this.energy < CONFIG.ANT_LOW_ENERGY_THRESHOLD) {
+      const dx = this.position.x - this.colony.x;
+      const dy = this.position.y - this.colony.y;
+      const distToColony = Math.sqrt(dx * dx + dy * dy);
+
+      if (distToColony < CONFIG.COLONY_RETURN_RADIUS) {
+        // Restore energy and push away from colony
+        this.energy = Math.min(this.energyCapacity, this.energy + CONFIG.ANT_ENERGY_FROM_COLONY);
+
+        // Push away from colony to prevent clustering
+        if (distToColony > 5) {
+          const baseAngle = Math.atan2(dy, dx);
+          const randomSpread = (Math.random() - 0.5) * Math.PI * 0.5;
+          const finalAngle = baseAngle + randomSpread;
+          this.velocity.x = Math.cos(finalAngle) * this.maxSpeed;
+          this.velocity.y = Math.sin(finalAngle) * this.maxSpeed;
+        } else {
+          // At exact center - random direction
+          const randomAngle = Math.random() * Math.PI * 2;
+          this.velocity.x = Math.cos(randomAngle) * this.maxSpeed;
+          this.velocity.y = Math.sin(randomAngle) * this.maxSpeed;
+        }
+
+        this.justReturnedTimer = CONFIG.ANT_JUST_RETURNED_COOLDOWN;
+        this.stuckCounter = 0;
+      }
+    }
 
     // Energy consumption (and cap deltaTime to prevent huge drains)
     const cappedDelta = Math.min(deltaTime, CONFIG.ANT_MAX_DELTA_TIME);
@@ -982,23 +1049,44 @@ public stuckCounter: number = 0;
 
     this.lastPosition = { ...this.position };
 
-    // Boundary checking - bounce off edges
+    // Boundary checking - bounce off edges and update heading
     const margin = CONFIG.ANT_WORLD_BOUNDARY_MARGIN;
+    let hitBoundary = false;
+
     if (this.position.x < margin) {
       this.position.x = margin;
       this.velocity.x = Math.abs(this.velocity.x);
+      hitBoundary = true;
     }
     if (this.position.x > this.worldWidth - margin) {
       this.position.x = this.worldWidth - margin;
       this.velocity.x = -Math.abs(this.velocity.x);
+      hitBoundary = true;
     }
     if (this.position.y < margin) {
       this.position.y = margin;
       this.velocity.y = Math.abs(this.velocity.y);
+      hitBoundary = true;
     }
     if (this.position.y > this.worldHeight - margin) {
       this.position.y = this.worldHeight - margin;
       this.velocity.y = -Math.abs(this.velocity.y);
+      hitBoundary = true;
+    }
+
+    // If we hit a boundary, update heading to reflect the bounce
+    if (hitBoundary) {
+      const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.y * this.velocity.y);
+      if (speed > 0) {
+        this.lastHeading = Math.atan2(this.velocity.y, this.velocity.x);
+        this.visualHeading = this.lastHeading;
+      }
+
+      // Reset stuck counter - we just bounced
+      this.stuckCounter = 0;
+
+      // Only cancel exploration commitment (don't cancel trails - let them resume after bounce)
+      this.explorationCommitment = 0;
     }
 
     // Update sprite position
@@ -1436,6 +1524,27 @@ public stuckCounter: number = 0;
       this.trailEndCooldown -= deltaTime;
     }
 
+    // PRIORITY -1: DISTRESS RESPONSE - highest priority, help allies under attack
+    const distressLevel = this.pheromoneGrid.getPheromoneLevel(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    if (distressLevel > CONFIG.DISTRESS_DETECTION_THRESHOLD) {
+      // Follow distress gradient to help allies
+      const gradient = this.pheromoneGrid.getPheromoneGradient(
+        this.position.x,
+        this.position.y,
+        'distressPher'
+      );
+
+      if (Math.abs(gradient.x) > 0.001 || Math.abs(gradient.y) > 0.001) {
+        this.setDirection(gradient, deltaTime);
+        return;
+      }
+    }
+
     // PRIORITY 0: LOW ENERGY PANIC MODE - abandon foraging and beeline home
     if (this.energy < CONFIG.ANT_LOW_ENERGY_THRESHOLD) {
       const colonyDir = {
@@ -1651,9 +1760,8 @@ public stuckCounter: number = 0;
     const rays = this.senseEnvironment(foodSources, obstacleManager);
     const candidates: { angle: number; score: number }[] = [];
 
-    // Forager comfort zone: prefer staying within ~1500px of colony
-    const FORAGER_COMFORT_ZONE = 1500;
-    const outsideComfortZone = toColonyDist > FORAGER_COMFORT_ZONE;
+    // Forager comfort zone: stay close to colony unless on a trail
+    const outsideComfortZone = toColonyDist > CONFIG.FORAGER_COMFORT_ZONE;
 
     for (const ray of rays) {
       let score = 0;
@@ -1674,9 +1782,9 @@ public stuckCounter: number = 0;
       if (outsideComfortZone) {
         // Bonus for directions that reduce distance to colony
         if (rayEndColonyDist < toColonyDist) {
-          score += 0.8; // Strong bias toward home
+          score += 1.0; // Moderate bias toward home
         } else {
-          score -= 0.4; // Penalty for going farther
+          score -= 0.5; // Mild penalty for going farther
         }
       } else {
         // Inside comfort zone, slight bonus for exploring outward (normal behavior)
@@ -1703,6 +1811,24 @@ public stuckCounter: number = 0;
 
   /** Phase 2.3: GUARDING_FOOD state - Scout patrols and defends food source */
   private updateGuardingFood(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // PRIORITY 1: Check for distress pheromone (emergency - drop everything)
+    const distressLevel = this.pheromoneGrid.getPheromoneLevel(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    if (distressLevel > CONFIG.DISTRESS_DETECTION_THRESHOLD) {
+      // Drop guard duty and respond to distress
+      const guardedFood = foodSources?.find((f: any) => f.id === this.guardingFoodId);
+      if (guardedFood) {
+        guardedFood.unregisterGuard(this);
+      }
+      this.guardingFoodId = null;
+      this.setScoutState(ScoutState.RESPONDING_TO_DISTRESS);
+      return;
+    }
+
     // Find the food source we're guarding
     const guardedFood = foodSources?.find((f: any) => f.id === this.guardingFoodId);
 
@@ -1865,6 +1991,37 @@ public stuckCounter: number = 0;
     // When food is picked up, ant transitions to RETURNING state automatically
     // We'll intercept that in checkFoodPickup() to also store the food ID for guarding
     this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+  }
+
+  /** RESPONDING_TO_DISTRESS state - Follow distress gradient to help allies */
+  private updateRespondingToDistress(deltaTime: number, foodSources?: any[], obstacleManager?: any): void {
+    // Check current distress level
+    const distressLevel = this.pheromoneGrid.getPheromoneLevel(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    // If distress has faded, return to exploring
+    if (distressLevel < CONFIG.DISTRESS_DETECTION_THRESHOLD * 0.5) {
+      this.setScoutState(ScoutState.EXPLORING);
+      return;
+    }
+
+    // Follow distress gradient toward source
+    const gradient = this.pheromoneGrid.getPheromoneGradient(
+      this.position.x,
+      this.position.y,
+      'distressPher'
+    );
+
+    // If there's a gradient, follow it
+    if (Math.abs(gradient.x) > 0.001 || Math.abs(gradient.y) > 0.001) {
+      this.setDirection(gradient, deltaTime);
+    } else {
+      // No gradient, revert to exploring
+      this.setScoutState(ScoutState.EXPLORING);
+    }
   }
 
   /** SCOUT behavior - Simple directional exploration with smell */
@@ -2217,10 +2374,34 @@ public stuckCounter: number = 0;
     const colonyDist = Math.sqrt(toColony.x * toColony.x + toColony.y * toColony.y);
     const colonyDir = colonyDist > 0 ? { x: toColony.x / colonyDist, y: toColony.y / colonyDist } : { x: 1, y: 0 };
 
-    // If already within return radius, stop navigating toward exact center - just maintain current trajectory
-    // This prevents clustering at the exact center point while allowing ants to keep momentum
+    // Within return radius - turn perpendicular and orbit, food will be delivered automatically from anywhere in radius
+    // Don't aim for center - prevents traffic jam at colony center
     if (colonyDist < CONFIG.COLONY_RETURN_RADIUS) {
-      return; // Don't steer - just coast with current velocity
+      // Turn perpendicular to radial direction (orbit around colony instead of converging on center)
+      // This spreads out returning ants instead of funneling them to a point
+      const perpendicularDir = { x: -colonyDir.y, y: colonyDir.x }; // Rotate 90 degrees
+
+      // Add slight outward bias to prevent spiraling inward
+      const outwardBias = 0.3;
+      const orbitDir = {
+        x: perpendicularDir.x * (1 - outwardBias) - colonyDir.x * outwardBias,
+        y: perpendicularDir.y * (1 - outwardBias) - colonyDir.y * outwardBias
+      };
+
+      // Slow down as we get closer to center
+      const distanceRatio = colonyDist / CONFIG.COLONY_RETURN_RADIUS;
+      const targetSpeed = this.maxSpeed * Math.max(0.3, distanceRatio);
+
+      this.setDirection(orbitDir, deltaTime);
+
+      // Clamp speed
+      const currentSpeed = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+      if (currentSpeed > targetSpeed) {
+        this.velocity.x *= 0.9;
+        this.velocity.y *= 0.9;
+      }
+
+      return; // Orbit and slow down, don't converge on center
     }
 
     let dirX: number;
@@ -2368,8 +2549,7 @@ public stuckCounter: number = 0;
             this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
             break;
           case ScoutState.RESPONDING_TO_DISTRESS:
-            // TODO: Phase 3.2
-            this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
+            this.updateRespondingToDistress(deltaTime, foodSources, obstacleManager);
             break;
           default:
             this.updateScoutBehavior(deltaTime, foodSources, obstacleManager);
@@ -2552,7 +2732,7 @@ public stuckCounter: number = 0;
     return 0; // No food delivered
   }
 
-  private handleCombat(deltaTime: number, enemyAnts: Ant[]): void {
+  private handleCombat(deltaTime: number, enemyAnts: Ant[], friendlyAnts?: Ant[]): void {
     // Debug: log enemy count for first call
     if (this.id === Ant.selectedAntId && this.age < 5) {
       console.log(`[Combat Init] ${enemyAnts.length} enemy ants in list`);
@@ -2639,12 +2819,12 @@ public stuckCounter: number = 0;
 
         // If in combat range and carrying food, fight desperately
         if (nearestDistance < CONFIG.COMBAT_RANGE && isCarryingFood) {
-          this.engageInCombat(deltaTime, nearestEnemy);
+          this.engageInCombat(deltaTime, nearestEnemy, friendlyAnts);
         }
       } else {
         // Flee disabled - only fight if actually in melee range
         if (nearestDistance < CONFIG.COMBAT_RANGE) {
-          this.engageInCombat(deltaTime, nearestEnemy);
+          this.engageInCombat(deltaTime, nearestEnemy, friendlyAnts);
         }
         // Otherwise ignore enemy and continue normal behavior
       }
@@ -2655,7 +2835,7 @@ public stuckCounter: number = 0;
     if (isScout) {
       // Pursue and engage if within combat range
       if (nearestDistance < CONFIG.COMBAT_RANGE) {
-        this.engageInCombat(deltaTime, nearestEnemy);
+        this.engageInCombat(deltaTime, nearestEnemy, friendlyAnts);
       } else {
         // Chase enemy (set isInCombat to prevent normal movement from overriding)
         this.isInCombat = true; // Treat chasing as combat state
@@ -2669,7 +2849,7 @@ public stuckCounter: number = 0;
     }
   }
 
-  private engageInCombat(deltaTime: number, enemy: Ant): void {
+  private engageInCombat(deltaTime: number, enemy: Ant, friendlyAnts?: Ant[]): void {
     this.isInCombat = true;
     this.combatTarget = enemy;
     this.fleeing = false;
@@ -2677,6 +2857,33 @@ public stuckCounter: number = 0;
     // RTS-style combat: Stop moving and face enemy
     this.velocity.x = 0;
     this.velocity.y = 0;
+
+    // Apply repulsion from nearby friendly ants to prevent clustering
+    if (friendlyAnts && friendlyAnts.length > 0) {
+      let repulsionX = 0;
+      let repulsionY = 0;
+      const repulsionRadius = 30; // Only repel if very close
+      const repulsionStrength = 0.8; // Subtle push
+
+      for (const friendly of friendlyAnts) {
+        if (friendly.id === this.id || friendly.isDead) continue;
+
+        const fdx = this.position.x - friendly.position.x;
+        const fdy = this.position.y - friendly.position.y;
+        const fdist = Math.sqrt(fdx * fdx + fdy * fdy);
+
+        if (fdist < repulsionRadius && fdist > 0) {
+          // Push away from friendly (inverse square falloff)
+          const force = repulsionStrength * (1 - fdist / repulsionRadius);
+          repulsionX += (fdx / fdist) * force;
+          repulsionY += (fdy / fdist) * force;
+        }
+      }
+
+      // Apply repulsion as velocity
+      this.velocity.x += repulsionX;
+      this.velocity.y += repulsionY;
+    }
 
     // Face the enemy
     const dx = enemy.position.x - this.position.x;
@@ -2710,6 +2917,15 @@ public stuckCounter: number = 0;
       } else {
         attackDamage = CONFIG.FORAGER_ATTACK_DAMAGE * this.traits.dpsMultiplier;
         attackSpeed = CONFIG.FORAGER_ATTACK_SPEED;
+      }
+
+      // Home territory buff: +40% damage within 800px of own colony
+      const distToColony = Math.sqrt(
+        (this.position.x - this.colony.x) ** 2 +
+        (this.position.y - this.colony.y) ** 2
+      );
+      if (distToColony < CONFIG.HOME_TERRITORY_RADIUS) {
+        attackDamage *= 1.4; // +40% damage at home
       }
 
       // Deal damage to enemy
@@ -2868,7 +3084,6 @@ public stuckCounter: number = 0;
     }
 
     if (this.scoutState !== newState) {
-      console.log(`Scout ${this.id}: ${this.scoutState} → ${newState}`);
       this.scoutState = newState;
     }
   }

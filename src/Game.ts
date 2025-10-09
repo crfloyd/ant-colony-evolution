@@ -65,11 +65,13 @@ export class Game {
   private blackScoutCountEl: HTMLElement;
   private blackFoodCountEl: HTMLElement;
   private blackKillsEl: HTMLElement;
+  private blackGenerationEl: HTMLElement;
   private redAntCountEl: HTMLElement;
   private redForagerCountEl: HTMLElement;
   private redScoutCountEl: HTMLElement;
   private redFoodCountEl: HTMLElement;
   private redKillsEl: HTMLElement;
+  private redGenerationEl: HTMLElement;
   private simTimeEl: HTMLElement;
   private fpsEl: HTMLElement;
 
@@ -93,11 +95,13 @@ export class Game {
     this.blackScoutCountEl = document.getElementById('blackScoutCount')!;
     this.blackFoodCountEl = document.getElementById('blackFoodCount')!;
     this.blackKillsEl = document.getElementById('blackKills')!;
+    this.blackGenerationEl = document.getElementById('blackGeneration')!;
     this.redAntCountEl = document.getElementById('redAntCount')!;
     this.redForagerCountEl = document.getElementById('redForagerCount')!;
     this.redScoutCountEl = document.getElementById('redScoutCount')!;
     this.redFoodCountEl = document.getElementById('redFoodCount')!;
     this.redKillsEl = document.getElementById('redKills')!;
+    this.redGenerationEl = document.getElementById('redGeneration')!;
     this.simTimeEl = document.getElementById('simTime')!;
     this.fpsEl = document.getElementById('fps')!;
 
@@ -1292,6 +1296,27 @@ Notes:
       });
     }
 
+    // Generation list panel toggle
+    const genListBtn = document.getElementById('genListBtn');
+    const genListPanel = document.getElementById('genListPanel');
+    const closeGenList = document.getElementById('closeGenList');
+    if (genListBtn && genListPanel) {
+      genListBtn.addEventListener('click', () => {
+        const isVisible = genListPanel.style.display !== 'none';
+        genListPanel.style.display = isVisible ? 'none' : 'block';
+        genListBtn.classList.toggle('active', !isVisible);
+        if (!isVisible) {
+          this.updateGenerationList();
+        }
+      });
+    }
+    if (closeGenList && genListPanel) {
+      closeGenList.addEventListener('click', () => {
+        genListPanel.style.display = 'none';
+        if (genListBtn) genListBtn.classList.remove('active');
+      });
+    }
+
     // Metrics panel toggle
     const metricsBtn = document.getElementById('metricsBtn');
     const metricsPanel = document.getElementById('metricsPanel');
@@ -1543,9 +1568,9 @@ Notes:
     const perfStart = performance.now();
     const timings: Record<string, number> = {};
 
-    // Update pheromone grid
+    // Update pheromone grid (pass simulation speed so decay scales properly)
     let t = performance.now();
-    this.pheromoneGrid.update();
+    this.pheromoneGrid.update(this.simulationSpeed);
     timings.pheromoneUpdate = performance.now() - t;
 
     // Spray distress pheromone if button is held (testing Phase 1.1)
@@ -1666,6 +1691,7 @@ Notes:
     this.blackScoutCountEl.textContent = blackColony.getScoutCount().toString();
     this.blackFoodCountEl.textContent = Math.floor(blackColony.foodStored).toString();
     this.blackKillsEl.textContent = blackColony.kills.toString();
+    this.blackGenerationEl.textContent = blackColony.generation.toString();
 
     // Update black colony genome
     const blackScoutPercent = Math.round(blackColony.genome.scoutRatio * 100);
@@ -1682,6 +1708,7 @@ Notes:
     this.redScoutCountEl.textContent = redColony.getScoutCount().toString();
     this.redFoodCountEl.textContent = Math.floor(redColony.foodStored).toString();
     this.redKillsEl.textContent = redColony.kills.toString();
+    this.redGenerationEl.textContent = redColony.generation.toString();
 
     // Update red colony genome
     const redScoutPercent = Math.round(redColony.genome.scoutRatio * 100);
@@ -1698,6 +1725,75 @@ Notes:
     this.simTimeEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
     this.fpsEl.textContent = Math.round(this.currentFPS).toString();
+
+    // Update generation list if panel is open (throttled to every 30 frames)
+    if (this.frameCount % 30 === 0) {
+      const genListPanel = document.getElementById('genListPanel');
+      if (genListPanel && genListPanel.style.display !== 'none') {
+        this.updateGenerationList();
+      }
+    }
+  }
+
+  private updateGenerationList(): void {
+    const genListContent = document.getElementById('genListContent');
+    if (!genListContent) return;
+
+    // Collect all gen 2+ ants from both colonies
+    const gen2PlusAnts: Array<{ ant: any; colony: string; colonyColor: string }> = [];
+
+    this.colonies[0].ants.forEach(ant => {
+      if (ant.generation >= 2) {
+        gen2PlusAnts.push({ ant, colony: 'Black', colonyColor: '#64c8ff' });
+      }
+    });
+
+    this.colonies[1].ants.forEach(ant => {
+      if (ant.generation >= 2) {
+        gen2PlusAnts.push({ ant, colony: 'Red', colonyColor: '#ff6464' });
+      }
+    });
+
+    // Sort by generation (highest first)
+    gen2PlusAnts.sort((a, b) => b.ant.generation - a.ant.generation);
+
+    if (gen2PlusAnts.length === 0) {
+      genListContent.innerHTML = '<div style="color: #999; text-align: center; padding: 20px;">No Gen 2+ ants yet.<br>Population must advance a generation.</div>';
+      return;
+    }
+
+    // Build HTML for the list
+    let html = '';
+    gen2PlusAnts.forEach(({ ant, colony, colonyColor }) => {
+      const role = ant.role === 1 ? 'Scout' : 'Forager';
+      const healthPercent = Math.round((ant.health / ant.maxHealth) * 100);
+      const genBadge = ant.generation === 2 ? '🥇' : (ant.generation === 3 ? '🥈' : '🥉');
+
+      html += `
+        <div class="gen-ant-item" data-ant-x="${ant.position.x}" data-ant-y="${ant.position.y}">
+          <div class="gen-ant-header">
+            <span class="gen-ant-title" style="color: ${colonyColor}">Gen ${ant.generation} ${role}</span>
+            <span class="gen-ant-badge">${genBadge}</span>
+          </div>
+          <div class="gen-ant-details">
+            <span class="gen-ant-stat">Colony: ${colony}</span>
+            <span class="gen-ant-stat">HP: ${healthPercent}%</span>
+            <span class="gen-ant-stat">Pos: ${Math.round(ant.position.x)}, ${Math.round(ant.position.y)}</span>
+          </div>
+        </div>
+      `;
+    });
+
+    genListContent.innerHTML = html;
+
+    // Add click handlers to focus on ants
+    genListContent.querySelectorAll('.gen-ant-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const x = parseFloat(item.getAttribute('data-ant-x') || '0');
+        const y = parseFloat(item.getAttribute('data-ant-y') || '0');
+        this.camera.followPosition(x, y);
+      });
+    });
   }
 
   private onResize(): void {

@@ -208,37 +208,56 @@ export class FoodManager {
   }
 
   private spawnFood(): void {
-    // 65% chance to spawn in center region, 35% chance to spawn anywhere
-    const centerX = this.worldWidth / 2;
-    const centerY = this.worldHeight / 2;
-    const margin = CONFIG.FOOD_SPAWN_MARGIN; // Keep food away from edges so ants can reach it
+    // Contested resource zones: 30% near each colony, 40% in contested middle
+    const colonyPositions = this.getColonyPositions();
+    const margin = CONFIG.FOOD_SPAWN_MARGIN;
 
-    // Determine spawn region based on 65% center bias
-    const spawnInCenter = Math.random() < 0.65;
+    // Determine which zone to spawn in (30% colony1, 30% colony2, 40% middle)
+    const rand = Math.random();
+    let spawnZone: 'colony1' | 'colony2' | 'contested';
 
-    // Center region is 50% of map dimensions (0.25 radius from center = 0.5 total width/height)
-    const centerRegionWidth = this.worldWidth * 0.5;
-    const centerRegionHeight = this.worldHeight * 0.5;
-    const centerMinX = centerX - centerRegionWidth / 2;
-    const centerMaxX = centerX + centerRegionWidth / 2;
-    const centerMinY = centerY - centerRegionHeight / 2;
-    const centerMaxY = centerY + centerRegionHeight / 2;
+    if (colonyPositions.length >= 2) {
+      if (rand < 0.3) {
+        spawnZone = 'colony1';
+      } else if (rand < 0.6) {
+        spawnZone = 'colony2';
+      } else {
+        spawnZone = 'contested';
+      }
+    } else {
+      // Fallback if not enough colonies (spawn anywhere)
+      spawnZone = 'contested';
+    }
 
     let position: Vector2;
     let attempts = 0;
 
     do {
-      if (spawnInCenter) {
-        // Spawn in center 50% region
+      if (spawnZone === 'colony1' && colonyPositions[0]) {
+        // Spawn in circle around colony 1 (radius 1500-2500px)
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.FOOD_ZONE_MIN_DIST + Math.random() * (CONFIG.FOOD_ZONE_MAX_DIST - CONFIG.FOOD_ZONE_MIN_DIST);
         position = {
-          x: centerMinX + Math.random() * centerRegionWidth,
-          y: centerMinY + Math.random() * centerRegionHeight,
+          x: colonyPositions[0].x + Math.cos(angle) * distance,
+          y: colonyPositions[0].y + Math.sin(angle) * distance,
+        };
+      } else if (spawnZone === 'colony2' && colonyPositions[1]) {
+        // Spawn in circle around colony 2 (radius 1500-2500px)
+        const angle = Math.random() * Math.PI * 2;
+        const distance = CONFIG.FOOD_ZONE_MIN_DIST + Math.random() * (CONFIG.FOOD_ZONE_MAX_DIST - CONFIG.FOOD_ZONE_MIN_DIST);
+        position = {
+          x: colonyPositions[1].x + Math.cos(angle) * distance,
+          y: colonyPositions[1].y + Math.sin(angle) * distance,
         };
       } else {
-        // Spawn anywhere on map
+        // Spawn in contested middle zone (center 50% of map)
+        const centerX = this.worldWidth / 2;
+        const centerY = this.worldHeight / 2;
+        const centerRegionWidth = this.worldWidth * 0.5;
+        const centerRegionHeight = this.worldHeight * 0.5;
         position = {
-          x: margin + Math.random() * (this.worldWidth - 2 * margin),
-          y: margin + Math.random() * (this.worldHeight - 2 * margin),
+          x: centerX - centerRegionWidth / 2 + Math.random() * centerRegionWidth,
+          y: centerY - centerRegionHeight / 2 + Math.random() * centerRegionHeight,
         };
       }
 
@@ -246,7 +265,6 @@ export class FoodManager {
       const inObstacle = this.obstacleManager && this.obstacleManager.checkCollision(position, CONFIG.FOOD_SPAWN_OBSTACLE_CHECK_RADIUS);
 
       // Check distance from all colonies
-      const colonyPositions = this.getColonyPositions();
       let tooCloseToColony = false;
       for (const colonyPos of colonyPositions) {
         const dx = position.x - colonyPos.x;

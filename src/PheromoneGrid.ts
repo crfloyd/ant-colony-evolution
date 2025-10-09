@@ -16,6 +16,7 @@ export class PheromoneGrid {
   private height: number;
   private renderFrame: number = 0;
   private updateFrame: number = 0;
+  private simulatedFrameAccumulator: number = 0; // Track simulated frames for speed-adjusted updates
   private depletedFoodSources: Set<string> = new Set(); // Track depleted food sources for faster decay
   private worldWidth: number;
   private worldHeight: number;
@@ -304,10 +305,15 @@ export class PheromoneGrid {
     return x >= 0 && x < this.width && y >= 0 && y < this.height;
   }
 
-  public update(): void {
-    // Only update every N frames for performance
-    this.updateFrame++;
-    if (this.updateFrame % CONFIG.PHEROMONE_UPDATE_INTERVAL !== 0) return;
+  public update(simulationSpeed: number = 1): void {
+    // Accumulate simulated frames - update more frequently at higher speeds
+    this.simulatedFrameAccumulator += simulationSpeed;
+
+    // Only update when enough simulated frames have passed
+    if (this.simulatedFrameAccumulator < CONFIG.PHEROMONE_UPDATE_INTERVAL) return;
+
+    // Reset accumulator (keep remainder for next update)
+    this.simulatedFrameAccumulator -= CONFIG.PHEROMONE_UPDATE_INTERVAL;
 
     // Optimization 2: Use flat Float32Arrays for each colony's pheromones
     const gridSize = this.width * this.height;
@@ -331,6 +337,7 @@ export class PheromoneGrid {
     }
 
     // Apply evaporation and diffusion with separate rates for food/home/distress pheromones
+    // Use base decay rates - update frequency scales with speed instead
     const rho_food = CONFIG.PHEROMONE_FOOD_DECAY_RATE;
     const rho_home = CONFIG.PHEROMONE_HOME_DECAY_RATE;
     const rho_distress = CONFIG.PHEROMONE_DISTRESS_DECAY_RATE;
@@ -373,7 +380,7 @@ export class PheromoneGrid {
 
         // Distress: concentration-dependent decay - higher concentration decays faster to prevent accumulation
         const distressConcentration = cell.distressPher / CONFIG.PHEROMONE_MAX_LEVEL;
-        const effectiveDistressDecay = rho_distress * (1.0 + distressConcentration * 0.3); // Up to 1.3x decay at max concentration (reduced from 2.5x)
+        const effectiveDistressDecay = rho_distress * (1.0 + distressConcentration * 0.3); // Up to 1.3x decay at max concentration
         let distressValue = cell.distressPher * (1 - effectiveDistressDecay);
 
         // Optimization 3: Check if we need to calculate diffusion at all

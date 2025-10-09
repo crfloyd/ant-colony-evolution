@@ -5,12 +5,12 @@ export const WORLD_WIDTH = 10000;
 export const WORLD_HEIGHT = 10000;
 
 // Colony Settings
-export const INITIAL_ANT_COUNT = 300; // Test FPS with fewer ants
-export const MAX_ANT_COUNT = 800; // Trigger generation advancement when population exceeds this
+export const INITIAL_ANT_COUNT = 100; // Starting population per colony
+export const MAX_ANT_COUNT = 999999; // No artificial population cap - natural selection only
 export const COLONY_STARTING_FOOD = 0; // Start with no food - ants must forage to grow population
 export const COLONY_RETURN_RADIUS = 350; // Distance within which ant can deliver food
 export const COLONY_OUTER_RADIUS = 480; // Visual size of colony sprite
-export const GENERATION_SURVIVAL_RATIO = 0.5; // Fraction of ants that survive generation culling
+export const GENERATION_SURVIVAL_RATIO = 0.5; // DEPRECATED - no longer used (natural selection only)
 
 // Evolution Settings
 export const MUTATION_RATE = 0.005; // ±0.005 per generation (0.5% change per offspring)
@@ -20,15 +20,17 @@ export const TRAIT_MIN = 0.7; // Minimum trait multiplier
 export const TRAIT_MAX = 1.3; // Maximum trait multiplier
 
 // Spawning Settings
-export const FOOD_COST_TO_SPAWN = 10;
+export const FOOD_COST_TO_SPAWN = 3; // Base cost (scales +50% per 100 ants: 3 → 5 → 8 → 12 → 17...)
 
 // Food Settings
-export const INITIAL_FOOD_SOURCES = 6;
+export const INITIAL_FOOD_SOURCES = 10;
 export const MIN_FOOD_PER_SOURCE = 50;
 export const MAX_FOOD_PER_SOURCE = 100;
-export const FOOD_RESPAWN_INTERVAL = 1200; // frames - slower respawn
-export const MAX_FOOD_SOURCES = 30; // More food sources to support population
+export const FOOD_RESPAWN_INTERVAL = 1600; // frames - slower respawn
+export const MAX_FOOD_SOURCES = 15; // More food sources to support population
 export const FOOD_MIN_DIST_FROM_COLONY = 1500; // Minimum spawn distance from colony
+export const FOOD_ZONE_MIN_DIST = 1500; // Min distance from colony for "home zone" spawns
+export const FOOD_ZONE_MAX_DIST = 2500; // Max distance from colony for "home zone" spawns
 export const FOOD_PHER_AVOIDANCE_THRESHOLD = 15.0; // Only avoid VERY high foodPher areas
 export const FOOD_SPAWN_MARGIN = 50; // Keep food away from world edges
 export const FOOD_SPAWN_OBSTACLE_CHECK_RADIUS = 80; // Radius for obstacle collision check (larger than max food radius to prevent overlap)
@@ -105,6 +107,13 @@ export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when health drops below th
 export const COMBAT_HEALTH_REWARD = 15; // Health gained for winning a fight
 export const COMBAT_DETECTION_RANGE = 300; // Distance to detect enemy ants (pixels) - increased for more combat
 export const FORAGERS_FLEE = false; // Toggle whether foragers flee from enemies
+export const HOME_TERRITORY_RADIUS = 800; // Radius around colony for home territory buff (+40% damage)
+
+// Crisis Evolution Settings
+export const CRISIS_POPULATION_THRESHOLD = 0.3; // Crisis when below 30% of peak population
+export const CRISIS_MAX_BONUS_STACKS = 3; // Max 3 stacks of crisis bonus
+export const CRISIS_STAT_BONUS_PER_STACK = 0.10; // +10% stats per stack
+export const CRISIS_MUTATION_MULTIPLIER = 1.5; // 50% higher mutation rate in crisis
 
 // Ant physics and collision
 export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
@@ -138,7 +147,7 @@ export const PHEROMONE_CELL_SIZE = 20;
 // distressPher half-life ≈ 1-2s @ 20Hz → ρ ≈ 0.4 (emergency signal, very fast fade)
 export const PHEROMONE_HOME_DECAY_RATE = 0.000193; // Very slow decay - accumulates as safe area map
 export const PHEROMONE_FOOD_DECAY_RATE = 0.00347; // Faster decay for food trails
-export const PHEROMONE_DISTRESS_DECAY_RATE = 0.4; // Very fast decay - distress signal fades in 1-2 seconds
+export const PHEROMONE_DISTRESS_DECAY_RATE = 1.5; // Very fast decay - distress signal fades in 1-2 seconds
 
 // Diffusion rates - separate for each type (much smaller than before)
 export const PHEROMONE_HOME_DIFFUSION_RATE = 0.01; // Minimal diffusion for home
@@ -222,7 +231,7 @@ export const SCOUT_OBSTACLE_CORRECTION_WEIGHT = 0.3; // Light correction for sco
 export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in
 export const SCOUT_EXPLORATION_COMMIT_DISTANCE = 3500; // Travel this far before picking new direction
 export const SCOUT_STUCK_TARGET_RESET_TIME = 5.0 * 60; // If stuck for 5 seconds, pick new target (300 frames at 60fps)
-export const FORAGER_COMFORT_ZONE = 1500; // Don't pick targets inside forager territory
+export const FORAGER_COMFORT_ZONE = 1200; // Foragers prefer staying near colony but will explore for trails
 
 // Softmax selection
 export const SOFTMAX_TEMPERATURE = 1.0; // Temperature for probabilistic turning
