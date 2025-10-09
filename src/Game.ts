@@ -1232,6 +1232,16 @@ Notes:
         e.preventDefault(); // Prevent page scroll
         togglePause();
       }
+
+      // 'H' key to toggle health bars
+      if (e.code === 'KeyH' && e.target === document.body) {
+        e.preventDefault();
+        Ant.showHealthBars = !Ant.showHealthBars;
+        const healthBarBtn = document.getElementById('healthBarBtn');
+        if (healthBarBtn) {
+          healthBarBtn.classList.toggle('active', Ant.showHealthBars);
+        }
+      }
     });
 
     // Slow down button
@@ -1270,6 +1280,15 @@ Notes:
       rockColliderBtn.addEventListener('click', () => {
         this.showRockColliders = !this.showRockColliders;
         rockColliderBtn.classList.toggle('active', this.showRockColliders);
+      });
+    }
+
+    // Health bar toggle
+    const healthBarBtn = document.getElementById('healthBarBtn');
+    if (healthBarBtn) {
+      healthBarBtn.addEventListener('click', () => {
+        Ant.showHealthBars = !Ant.showHealthBars;
+        healthBarBtn.classList.toggle('active', Ant.showHealthBars);
       });
     }
 

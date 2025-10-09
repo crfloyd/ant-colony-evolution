@@ -87,18 +87,20 @@ export const SCOUT_DISTRESS_DETECTION_RANGE = 500; // Detect distress pheromone
 export const SCOUT_GUARD_RADIUS = 800; // Stay within this distance of food while guarding (pixels)
 export const SCOUT_GUARD_PATROL_MIN = 150; // Minimum patrol distance from food (pixels)
 export const SCOUT_GUARD_PATROL_MAX = 350; // Maximum patrol distance from food (pixels)
-export const SCOUT_GUARD_TIMEOUT = 60; // Seconds to wait for foragers before re-alerting colony
+export const SCOUT_GUARD_TIMEOUT = 60 * 60; // Frames to wait for foragers before re-alerting colony (60s at 60fps)
 export const SCOUT_MAX_TAGGERS_PER_FOOD = 1; // Maximum scouts that should tag the same food source (only 1 scout alerts colony)
 export const SCOUT_MAX_GUARDS_PER_FOOD = 5; // Maximum scouts guarding a single food source
 
-// Combat Settings
+// Combat Settings (RTS-style discrete attacks)
 export const COMBAT_RANGE = 20; // Distance to initiate combat (pixels)
 export const FORAGER_BASE_HEALTH = 300; // Base health for foragers (workers, weaker than scouts)
-export const FORAGER_BASE_DPS = 20; // Base damage per second for foragers
+export const FORAGER_ATTACK_DAMAGE = 25; // Damage per attack for foragers
+export const FORAGER_ATTACK_SPEED = 1.2; // Seconds between attacks for foragers (slower attackers)
 export const SCOUT_BASE_HEALTH = 600; // Base health for scouts (fighters, 2x forager health)
-export const SCOUT_BASE_DPS = 50; // Base damage per second for scouts
-export const SCOUT_BASE_HEALTH_REGEN = 2.0; // Base health regen per second (20% per minute = 600 * 0.2 / 60)
-export const FORAGER_BASE_HEALTH_REGEN = 1.0; // Base health regen per second for foragers
+export const SCOUT_ATTACK_DAMAGE = 60; // Damage per attack for scouts
+export const SCOUT_ATTACK_SPEED = 0.8; // Seconds between attacks for scouts (faster attackers)
+export const SCOUT_BASE_HEALTH_REGEN = 2.0 / 60; // Base health regen per frame (2 HP/s at 60fps)
+export const FORAGER_BASE_HEALTH_REGEN = 1.0 / 60; // Base health regen per frame (1 HP/s at 60fps)
 export const COMBAT_FLEE_THRESHOLD = 20; // Auto-flee when health drops below this
 export const COMBAT_HEALTH_REWARD = 15; // Health gained for winning a fight
 export const COMBAT_DETECTION_RANGE = 300; // Distance to detect enemy ants (pixels) - increased for more combat
@@ -107,11 +109,11 @@ export const FORAGERS_FLEE = false; // Toggle whether foragers flee from enemies
 // Ant physics and collision
 export const ANT_COLLISION_RADIUS = 12; // Radius for obstacle collision checks
 export const ANT_SAFE_DISTANCE_FROM_OBSTACLE = 20; // Safe push distance from obstacles
-export const ANT_STUCK_THRESHOLD = 1.0; // Seconds before ant triggers unstuck recovery (increased to allow counter to show)
+export const ANT_STUCK_THRESHOLD = 1.0 * 60; // Frames before ant triggers unstuck recovery (1s at 60fps)
 export const ANT_STUCK_BACKUP_DISTANCE = 10; // Distance to backup when stuck
 export const ANT_EMERGENCY_UNSTUCK_COUNT = 3; // Number of unstucks in window to trigger emergency mode
-export const ANT_EMERGENCY_UNSTUCK_WINDOW = 6; // Seconds to track unstuck history
-export const ANT_EMERGENCY_MODE_DURATION = 10; // Seconds of random walk in emergency mode
+export const ANT_EMERGENCY_UNSTUCK_WINDOW = 6 * 60; // Frames to track unstuck history (6s at 60fps)
+export const ANT_EMERGENCY_MODE_DURATION = 10 * 60; // Frames of random walk in emergency mode (10s at 60fps)
 export const ANT_WORLD_BOUNDARY_MARGIN = 50; // Margin from world edges
 export const ANT_MAX_DELTA_TIME = 2; // Cap delta time to prevent huge energy drains
 export const ANT_EXPECTED_MOVEMENT_RATIO = 0.3; // Minimum expected movement for stuck detection
@@ -192,18 +194,18 @@ export const FORAGING_TRAIL_SAMPLE_MIN = 0.003; // Minimum pheromone in sample d
 export const FORAGING_GIVE_UP_TIME = 2700; // Frames (~45 seconds at 60fps) - if no food found, head back to colony to reset
 
 // Exploration commitment (smooth exploration movement)
-export const FORAGING_EXPLORATION_MIN_DURATION = 0.5; // Minimum seconds to commit to a direction
-export const FORAGING_EXPLORATION_MAX_DURATION = 1.5; // Maximum seconds to commit to a direction
+export const FORAGING_EXPLORATION_MIN_DURATION = 0.5 * 60; // Minimum frames to commit to a direction (0.5s at 60fps)
+export const FORAGING_EXPLORATION_MAX_DURATION = 1.5 * 60; // Maximum frames to commit to a direction (1.5s at 60fps)
 
 // Trail following hysteresis (prevents mode flapping at trail edges)
 export const TRAIL_ENTER_LEVEL = 0.08; // Higher threshold to start following
 export const TRAIL_EXIT_LEVEL = 0.02; // Lower threshold to stop (hysteresis)
-export const TRAIL_LATCH_TIME = 0.8; // Seconds to stay in mode
-export const TRAIL_END_COOLDOWN = 0.3; // Seconds to ignore trails after exiting
+export const TRAIL_LATCH_TIME = 0.8 * 60; // Frames to stay in mode (0.8s at 60fps)
+export const TRAIL_END_COOLDOWN = 0.3 * 60; // Frames to ignore trails after exiting (0.3s at 60fps)
 
 // Trail lock system (Task 17) - prevent following dead-end trails
-export const TRAIL_LOCK_DURATION = 45; // Seconds to lock out from following trails after dead end
-export const TRAIL_LOCK_MIN_FOLLOW_TIME = 3; // Minimum seconds following trail before considering it a "real" trail
+export const TRAIL_LOCK_DURATION = 45 * 60; // Frames to lock out from following trails after dead end (45s at 60fps)
+export const TRAIL_LOCK_MIN_FOLLOW_TIME = 3 * 60; // Minimum frames following trail before considering it a "real" trail (3s at 60fps)
 export const TRAIL_LOCK_MIN_DISTANCE = 150; // Minimum distance traveled on trail to trigger lock (pixels)
 
 // Returning behavior
@@ -219,7 +221,7 @@ export const SCOUT_OBSTACLE_CORRECTION_WEIGHT = 0.3; // Light correction for sco
 // Scout exploration
 export const LEVY_SCOUT_HOMEPHER_FADE_START = 100; // Distance where scout trail strength starts fading in
 export const SCOUT_EXPLORATION_COMMIT_DISTANCE = 3500; // Travel this far before picking new direction
-export const SCOUT_STUCK_TARGET_RESET_TIME = 5.0; // If stuck for 5 seconds, pick new target
+export const SCOUT_STUCK_TARGET_RESET_TIME = 5.0 * 60; // If stuck for 5 seconds, pick new target (300 frames at 60fps)
 export const FORAGER_COMFORT_ZONE = 1500; // Don't pick targets inside forager territory
 
 // Softmax selection

@@ -92,6 +92,7 @@ export class Ant implements Entity {
 
   // Trait visualization mode (toggled from UI)
   public static showTraitView: boolean = false;
+  public static showHealthBars: boolean = false;
 
   // Genetic traits (heritable)
   public traits: AntTraits;
@@ -116,6 +117,7 @@ export class Ant implements Entity {
   private efficiencyGlowGraphics: Graphics | null = null; // Efficiency trait: green glow
   private traitVisualsContainer: Container | null = null; // Container for all trait visuals
   private combatIndicatorGraphics: Graphics | null = null; // Combat state indicator (red/blue circle)
+  private healthBarGraphics: Graphics | null = null; // Health bar displayed above damaged ants
 
   // Trail tracking for speed visualization
   private trailPositions: Array<{x: number, y: number}> = [];
@@ -167,10 +169,11 @@ public stuckCounter: number = 0;
   private explorationDirection: number = 0; // Current exploration heading
   private explorationCommitment: number = 0; // Time remaining to stick with current direction
 
-  // Combat system
+  // Combat system (RTS-style discrete attacks)
   private combatTarget: Ant | null = null; // Current enemy ant being fought
   public isInCombat: boolean = false; // Combat state flag
   public fleeing: boolean = false; // Flee state flag
+  private attackCooldown: number = 0; // Time until next attack (in frames)
   public fleeDirection: number = 0; // Direction to flee
   private onKillCallback: (() => void) | null = null; // Callback to notify colony of kills
 
@@ -280,6 +283,10 @@ public stuckCounter: number = 0;
       // Create combat indicator graphics (red/blue circle)
       this.combatIndicatorGraphics = new Graphics();
       this.sprite.addChild(this.combatIndicatorGraphics);
+
+      // Create health bar graphics
+      this.healthBarGraphics = new Graphics();
+      this.sprite.addChild(this.healthBarGraphics);
     } else {
       // Fallback to graphics rendering
       this.graphics = new Graphics();
@@ -460,6 +467,32 @@ public stuckCounter: number = 0;
           // Red circle for combat
           this.combatIndicatorGraphics.circle(0, 0, 18);
           this.combatIndicatorGraphics.stroke({ width: 3, color: 0xff0000, alpha: 0.8 });
+        }
+      }
+
+      // Health bar - only show when damaged
+      if (this.healthBarGraphics) {
+        this.healthBarGraphics.clear();
+
+        if (Ant.showHealthBars && this.health < this.maxHealth) {
+          const barWidth = 30;
+          const barHeight = 4;
+          const barY = -25; // Above the ant
+
+          const healthRatio = this.health / this.maxHealth;
+
+          // Background (black)
+          this.healthBarGraphics.rect(-barWidth / 2, barY, barWidth, barHeight);
+          this.healthBarGraphics.fill({ color: 0x000000, alpha: 0.6 });
+
+          // Health fill (red to green gradient based on health)
+          const healthColor = healthRatio > 0.5 ? 0x00ff00 : (healthRatio > 0.25 ? 0xffff00 : 0xff0000);
+          this.healthBarGraphics.rect(-barWidth / 2, barY, barWidth * healthRatio, barHeight);
+          this.healthBarGraphics.fill({ color: healthColor, alpha: 0.9 });
+
+          // Border
+          this.healthBarGraphics.rect(-barWidth / 2, barY, barWidth, barHeight);
+          this.healthBarGraphics.stroke({ width: 1, color: 0xffffff, alpha: 0.8 });
         }
       }
 
@@ -1893,7 +1926,7 @@ public stuckCounter: number = 0;
         }
 
         // Give up if stuck for 3 seconds (likely blocked by obstacle)
-        if (this.smellProgressTimer > 3.0) {
+        if (this.smellProgressTimer > 3.0 * 60) {
           if (this.id === Ant.selectedAntId) {
             console.log(`[Selected Ant] Giving up on smell - no progress for 3s, resuming exploration`);
           }
@@ -2641,6 +2674,16 @@ public stuckCounter: number = 0;
     this.combatTarget = enemy;
     this.fleeing = false;
 
+    // RTS-style combat: Stop moving and face enemy
+    this.velocity.x = 0;
+    this.velocity.y = 0;
+
+    // Face the enemy
+    const dx = enemy.position.x - this.position.x;
+    const dy = enemy.position.y - this.position.y;
+    const angleToEnemy = Math.atan2(dy, dx);
+    this.visualHeading = angleToEnemy;
+
     // Emit distress pheromone to alert nearby ants
     this.pheromoneGrid.depositDistressPheromone(
       this.position.x,
@@ -2648,37 +2691,37 @@ public stuckCounter: number = 0;
       CONFIG.DISTRESS_DEPOSIT_STRENGTH
     );
 
-    // Calculate damage dealt to enemy
-    let damageToEnemy: number;
-    if (this.role === AntRole.SCOUT) {
-      // Scouts use their DPS trait
-      const baseDPS = CONFIG.SCOUT_BASE_DPS * this.traits.dpsMultiplier;
-      // 1.5x damage vs foragers (scouts dominate workers)
-      const roleMultiplier = enemy.role === AntRole.FORAGER ? 1.5 : 1.0;
-      damageToEnemy = baseDPS * roleMultiplier * deltaTime;
-    } else {
-      // Foragers use their DPS trait (weaker than scouts)
-      const baseDPS = CONFIG.FORAGER_BASE_DPS * this.traits.dpsMultiplier;
-      damageToEnemy = baseDPS * deltaTime;
-    }
+    // Decrement attack cooldown
+    this.attackCooldown -= deltaTime;
 
-    // Calculate damage received from enemy
-    let damageFromEnemy: number;
-    if (enemy.role === AntRole.SCOUT) {
-      // Enemy scout uses their DPS trait
-      const enemyBaseDPS = CONFIG.SCOUT_BASE_DPS * enemy.traits.dpsMultiplier;
-      // 1.5x damage vs foragers
-      const roleMultiplier = this.role === AntRole.FORAGER ? 1.5 : 1.0;
-      damageFromEnemy = enemyBaseDPS * roleMultiplier * deltaTime;
-    } else {
-      // Enemy forager uses their DPS trait
-      const enemyBaseDPS = CONFIG.FORAGER_BASE_DPS * enemy.traits.dpsMultiplier;
-      damageFromEnemy = enemyBaseDPS * deltaTime;
-    }
+    // Only attack when cooldown is ready
+    if (this.attackCooldown <= 0) {
+      // Calculate attack damage (discrete chunks, not continuous DPS)
+      let attackDamage: number;
+      let attackSpeed: number;
 
-    // Apply damage to health for both roles
-    enemy.health -= damageToEnemy;
-    this.health -= damageFromEnemy;
+      if (this.role === AntRole.SCOUT) {
+        attackDamage = CONFIG.SCOUT_ATTACK_DAMAGE * this.traits.dpsMultiplier;
+        attackSpeed = CONFIG.SCOUT_ATTACK_SPEED;
+        // 1.5x damage vs foragers (scouts dominate workers)
+        if (enemy.role === AntRole.FORAGER) {
+          attackDamage *= 1.5;
+        }
+      } else {
+        attackDamage = CONFIG.FORAGER_ATTACK_DAMAGE * this.traits.dpsMultiplier;
+        attackSpeed = CONFIG.FORAGER_ATTACK_SPEED;
+      }
+
+      // Deal damage to enemy
+      enemy.health -= attackDamage;
+
+      // Reset attack cooldown (convert attack speed from seconds to frames)
+      this.attackCooldown = attackSpeed * 60; // Convert seconds to frames
+
+      if (this.id === Ant.selectedAntId) {
+        console.log(`[ATTACK] Dealt ${attackDamage.toFixed(1)} damage to enemy (${enemy.health.toFixed(1)} HP remaining)`);
+      }
+    }
 
     // Check if enemy died (both roles use health)
     if (enemy.health <= 0) {
